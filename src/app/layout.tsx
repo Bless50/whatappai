@@ -102,7 +102,7 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }}
         />
       </head>
-      <body className="min-h-full bg-background text-foreground font-sans">
+      <body className="min-h-full bg-background text-foreground font-sans" suppressHydrationWarning>
         <ThemeProvider>
           {children}
           <ThemedToaster />

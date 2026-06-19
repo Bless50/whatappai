@@ -42,3 +42,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# WhatsApp Web sessions
+/sessions
+/src/server/whatsapp-gateway/sessions
+
