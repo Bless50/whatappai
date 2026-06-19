@@ -39,17 +39,17 @@ CREATE POLICY "Users can delete ai_agents for their accounts" ON public.ai_agent
 DO $$
 BEGIN
     -- Add ai_status column if it doesn't exist
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'conversations' AND column_name = 'ai_status') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'conversations' AND column_name = 'ai_status') THEN
         ALTER TABLE public.conversations ADD COLUMN ai_status TEXT NOT NULL DEFAULT 'active' CHECK (ai_status IN ('active', 'paused', 'disabled'));
     END IF;
 
     -- Add ai_paused_until column if it doesn't exist
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'conversations' AND column_name = 'ai_paused_until') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'conversations' AND column_name = 'ai_paused_until') THEN
         ALTER TABLE public.conversations ADD COLUMN ai_paused_until TIMESTAMPTZ;
     END IF;
 
     -- Add channel column if it doesn't exist
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'conversations' AND column_name = 'channel') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'conversations' AND column_name = 'channel') THEN
         ALTER TABLE public.conversations ADD COLUMN channel TEXT NOT NULL DEFAULT 'whatsapp' CHECK (channel IN ('whatsapp', 'facebook', 'instagram'));
     END IF;
 END $$;
@@ -57,7 +57,7 @@ END $$;
 -- Add channel to messages
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'messages' AND column_name = 'channel') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'messages' AND column_name = 'channel') THEN
         ALTER TABLE public.messages ADD COLUMN channel TEXT NOT NULL DEFAULT 'whatsapp' CHECK (channel IN ('whatsapp', 'facebook', 'instagram'));
     END IF;
 END $$;
