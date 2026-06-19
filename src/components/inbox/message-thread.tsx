@@ -34,7 +34,12 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
-import { MessageComposer } from "./message-composer";
+import {
+  MessageComposer,
+  CHAT_MEDIA_BUCKET,
+  type SendMediaPayload,
+} from "./message-composer";
+import { deleteAccountMedia } from "@/lib/storage/upload-media";
 import { TemplatePicker } from "./template-picker";
 import { buildReplyPreview } from "./reply-quote";
 import { toast } from "sonner";
@@ -473,6 +478,72 @@ export function MessageThread({
     [conversation, onNewMessage, onUpdateMessage]
   );
 
+  const handleSendMedia = useCallback(
+    async (payload: SendMediaPayload) => {
+      if (!conversation) return;
+
+      // Documents show their filename in our own bubble (and to the
+      // recipient as the Meta caption when no caption was typed); other
+      // kinds use the caption as-is. Audio carries no caption.
+      const contentText =
+        payload.kind === "document"
+          ? payload.caption || payload.filename || "Document"
+          : payload.caption;
+
+      const tempId = `temp-${Date.now()}`;
+      const optimisticMsg: Message = {
+        id: tempId,
+        conversation_id: conversation.id,
+        sender_type: "agent",
+        content_type: payload.kind,
+        content_text: contentText,
+        media_url: payload.mediaUrl,
+        status: "sending",
+        created_at: new Date().toISOString(),
+        reply_to_message_id: payload.replyToId,
+      };
+      onNewMessage(optimisticMsg);
+      setReplyTo(null);
+
+      try {
+        const res = await fetch("/api/whatsapp/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            conversation_id: conversation.id,
+            message_type: payload.kind,
+            media_url: payload.mediaUrl,
+            content_text: contentText,
+            filename: payload.filename,
+            reply_to_message_id: payload.replyToId,
+          }),
+        });
+
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          const reason = data?.error || `HTTP ${res.status}`;
+          console.error("Failed to send media:", reason);
+          toast.error(`Failed to send: ${reason}`);
+          onUpdateMessage(tempId, { status: "failed" });
+          // The upload never reached the recipient — GC the orphaned
+          // object rather than leaving it in the public bucket forever.
+          void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
+          return;
+        }
+
+        onUpdateMessage(tempId, { status: "sent" });
+      } catch (err) {
+        console.error("Failed to send media:", err);
+        const reason = err instanceof Error ? err.message : "network error";
+        toast.error(`Failed to send: ${reason}`);
+        onUpdateMessage(tempId, { status: "failed" });
+        void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
+      }
+    },
+    [conversation, onNewMessage, onUpdateMessage],
+  );
+
   const handleStatusChange = useCallback(
     async (status: ConversationStatus) => {
       if (!conversation) return;
@@ -721,7 +792,15 @@ export function MessageThread({
     : "Assign";
 
   return (
-    <div className={cn("flex flex-1 flex-col", DOODLE_BG_CLASSES)}>
+    // `min-w-0` is load-bearing: the page already puts min-w-0 on the
+    // thread's flex *wrapper* (issue #165), but this root keeps the
+    // default `min-width: auto`, so a single wide message (long unbroken
+    // URL/word) expands the whole thread past its flex share and the chat
+    // paints on top of the contact sidebar at lg+ — outgoing bubbles get
+    // clipped and the hover toolbar overlaps the Tags panel. Letting the
+    // root shrink lets the bubbles' break-words / max-w caps apply.
+    // Issue #257.
+    <div className={cn("flex min-w-0 flex-1 flex-col", DOODLE_BG_CLASSES)}>
       {/* Header — solid card surface sits on top of the doodle so the
           name/avatar/dropdowns stay legible. */}
       <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
@@ -942,6 +1021,7 @@ export function MessageThread({
         conversationId={conversation.id}
         sessionExpired={sessionInfo.expired}
         onSend={handleSend}
+        onSendMedia={handleSendMedia}
         onOpenTemplates={handleOpenTemplates}
         replyTo={replyTo}
         onClearReply={() => setReplyTo(null)}
