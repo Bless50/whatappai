@@ -47,3 +47,6 @@ next-env.d.ts
 /sessions
 /src/server/whatsapp-gateway/sessions
 
+# Supabase
+/supabase/.temp/
+
