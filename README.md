@@ -138,6 +138,19 @@ Key pages:
 - [Architecture](https://wacrm.tech/docs/architecture)
 - [Troubleshooting](https://wacrm.tech/docs/troubleshooting)
 
+## Known Dependencies
+
+### `@whiskeysockets/baileys` — pinned to `7.0.0-rc13`
+
+> **Intentional.** `7.0.0-rc13` is the version tagged as **`latest`** on npm by
+> the Baileys maintainers. No stable v7 release exists at the time of writing.
+> Downgrading to the legacy stable line (`6.7.23`) would introduce breaking
+> API changes incompatible with this codebase.
+>
+> We will upgrade to a stable `7.x` release as soon as one is published.
+> Track progress at
+> [github.com/WhiskeySockets/Baileys](https://github.com/WhiskeySockets/Baileys/releases).
+
 ## Stack
 
 - **App** — Next.js 16 (App Router), React 19, TypeScript, Tailwind v4.
