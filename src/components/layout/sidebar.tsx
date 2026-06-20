@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import {
+  Bot,
   Crown,
   GitBranch,
   LayoutDashboard,
@@ -93,6 +94,7 @@ const navItems: NavItem[] = [
   { href: "/pipelines", label: "Pipelines", icon: GitBranch },
   { href: "/broadcasts", label: "Broadcasts", icon: Radio },
   { href: "/automations", label: "Automations", icon: Zap },
+  { href: "/agents", label: "AI Agents", icon: Bot },
   { href: "/flows", label: "Flows", icon: Workflow, beta: true },
 ];
 

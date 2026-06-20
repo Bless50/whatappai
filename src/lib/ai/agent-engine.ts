@@ -32,7 +32,8 @@ import { buildPrompt } from './prompt-builder'
 import { getSkillDefinition } from './skills'
 import { supabaseAdmin } from './admin-client'
 import { decrypt } from '@/lib/whatsapp/encryption'
-import { sendText } from '@/lib/whatsapp/meta-api'
+import { sendTextMessage } from '@/lib/whatsapp/meta-api'
+import { generateEmbeddings } from './embedding-client'
 
 // ============================================================
 // Constants
@@ -88,12 +89,10 @@ export async function executeAgent(
       .from('ai_agent_knowledge_bases')
       .select('knowledge_base_id')
       .eq('agent_id', agent.id)
+      .limit(1)
 
     if (kbLinks && kbLinks.length > 0) {
-      const kbIds = kbLinks.map(
-        (r: { knowledge_base_id: string }) => r.knowledge_base_id,
-      )
-      knowledgeContext = await searchKnowledgeBases(kbIds, input.messageText)
+      knowledgeContext = await searchKnowledgeBases(agent.id, input.messageText, decryptedKey)
     }
 
     // ============ 4. BUILD PROMPT ============
@@ -207,7 +206,7 @@ export async function executeAgent(
       const waAccessToken = decrypt(waConfig.access_token)
 
       // Send the message via Meta API
-      const sendResult = await sendText({
+      const sendResult = await sendTextMessage({
         phoneNumberId: waConfig.phone_number_id,
         accessToken: waAccessToken,
         to: await getContactPhone(input.contactId),
@@ -215,13 +214,13 @@ export async function executeAgent(
       })
 
       // Insert the bot's message into the messages table
-      if (sendResult?.messages?.[0]?.id) {
+      if (sendResult?.messageId) {
         await db.from('messages').insert({
           conversation_id: input.conversationId,
           sender_type: 'bot',
           content_type: 'text',
           content_text: replyText,
-          message_id: sendResult.messages[0].id,
+          message_id: sendResult.messageId,
           status: 'sent',
         })
 
@@ -268,50 +267,54 @@ export async function executeAgent(
 
 /**
  * Search multiple knowledge bases for chunks relevant to the query.
- * Returns a formatted string of the top results.
- *
- * For now, uses simple text search (ILIKE) as a fallback when
- * embeddings are not yet populated. Once the embedding pipeline
- * is complete (Step 11), this will use pgvector cosine similarity.
+ * Generates an embedding for the user's query and calls the pgvector RPC.
  */
 async function searchKnowledgeBases(
-  kbIds: string[],
+  agentId: string,
   query: string,
+  openrouterKey: string
 ): Promise<string | undefined> {
-  const db = supabaseAdmin()
+  if (!query.trim()) return undefined
 
-  // Text search fallback — find chunks containing query keywords.
-  // This is a temporary approach until the full RAG pipeline (Step 11)
-  // is built with pgvector embeddings.
-  const keywords = query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((w) => w.length > 3)
-    .slice(0, 5)
+  try {
+    const db = supabaseAdmin()
 
-  if (keywords.length === 0) return undefined
+    // 1. Generate vector for the user's query
+    const results = await generateEmbeddings([query], openrouterKey)
+    if (!results || results.length === 0) return undefined
+    
+    // pgvector requires strings in "[val,val]" format
+    const queryVector = `[${results[0].embedding.join(',')}]`
 
-  // Build an OR query for keyword matching
-  const likePattern = keywords.map((k) => `%${k}%`).join('')
-  void likePattern // Will be used when we implement proper search
+    // 2. Perform vector similarity search
+    const { data: chunks, error } = await db.rpc('match_knowledge_chunks', {
+      query_embedding: queryVector,
+      match_agent_id: agentId,
+      match_count: 5,
+      similarity_threshold: 0.65 // Reasonable default for text-embedding-3-small
+    })
 
-  const { data: chunks, error } = await db
-    .from('ai_knowledge_chunks')
-    .select('content, source_type, source_name')
-    .in('knowledge_base_id', kbIds)
-    .or(keywords.map((k) => `content.ilike.%${k}%`).join(','))
-    .limit(5)
+    if (error) {
+      console.error('[ai/engine] Vector search error:', error)
+      return undefined
+    }
 
-  if (error || !chunks || chunks.length === 0) return undefined
+    if (!chunks || chunks.length === 0) return undefined
 
-  const formatted = chunks.map(
-    (c: { content: string; source_type: string; source_name: string | null }) => {
-      const source = c.source_name ? ` (Source: ${c.source_name})` : ''
-      return `${c.content}${source}`
-    },
-  )
+    // 3. Format results for the LLM
+    const formatted = chunks.map(
+      (c: { content: string; source_type: string; source_name: string | null; similarity: number }) => {
+        const source = c.source_name ? ` (Source: ${c.source_name})` : ''
+        // Include source attribution and similarity score (optional but good for debugging)
+        return `${c.content}${source}`
+      },
+    )
 
-  return formatted.join('\n\n---\n\n')
+    return formatted.join('\n\n---\n\n')
+  } catch (err) {
+    console.error('[ai/engine] Knowledge base search failed:', err)
+    return undefined
+  }
 }
 
 /**

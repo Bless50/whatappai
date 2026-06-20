@@ -11,6 +11,7 @@ import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
 } from '@/lib/whatsapp/template-webhook'
+import { dispatchToAIAgent } from '@/lib/ai/agent-dispatcher'
 
 // Lazy-initialized to avoid build-time crash when env vars are missing
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -712,6 +713,32 @@ async function processMessage(
         conversation_id: conversation.id,
       },
     }).catch((err) => console.error('[automations] dispatch failed:', err))
+  }
+
+  // ============================================================
+  // AI Agent dispatch.
+  //
+  // The AI agent is the last safety net in the dispatch chain:
+  //   Flows → Automations → AI Agent
+  //
+  // If no Flow consumed the message, dispatch to the AI agent.
+  // The dispatcher checks whether an active agent exists for this
+  // channel, whether the conversation's AI status allows it, and
+  // handles the full LLM call → reply cycle.
+  //
+  // Fire-and-forget: the AI response can take a few seconds (LLM
+  // round-trip) and must not block the webhook's 200 OK to Meta.
+  // ============================================================
+  if (!flowConsumed) {
+    dispatchToAIAgent({
+      accountId,
+      conversationId: conversation.id,
+      contactId: contactRecord.id,
+      messageText: inboundText,
+      userId: configOwnerUserId,
+      accessToken,
+      channel: 'whatsapp',
+    }).catch((err) => console.error('[ai-agent] dispatch failed:', err))
   }
 }
 
