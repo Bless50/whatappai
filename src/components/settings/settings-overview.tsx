@@ -127,8 +127,8 @@ export function SettingsOverview({
           .maybeSingle(),
         fetch('/api/whatsapp/config', { cache: 'no-store' }).then((r) =>
           r.ok && r.headers.get('content-type')?.includes('application/json')
-            ? r.json().catch(() => ({}))
-            : {}
+            ? r.json().catch(() => ({ connected: false }))
+            : { connected: false }
         ),
       ]);
       if (cancelled) return;
