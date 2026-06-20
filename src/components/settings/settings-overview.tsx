@@ -58,13 +58,16 @@ export function SettingsOverview({
     // Cheap counts — resolve fast, render immediately.
     (async () => {
       setCountsLoading(true);
+      const safeJson = (r: Response) =>
+        r.ok && r.headers.get('content-type')?.includes('application/json')
+          ? r.json().catch(() => ({}))
+          : Promise.resolve({});
+
       const [membersRes, invitesRes, templatesTotal, templatesPending, tagsRes, fieldsRes] =
         await Promise.allSettled([
-          fetch('/api/account/members', { cache: 'no-store' }).then((r) => r.json()),
+          fetch('/api/account/members', { cache: 'no-store' }).then(safeJson),
           canManageMembers
-            ? fetch('/api/account/invitations', { cache: 'no-store' }).then((r) =>
-                r.json(),
-              )
+            ? fetch('/api/account/invitations', { cache: 'no-store' }).then(safeJson)
             : Promise.resolve(null),
           supabase
             .from('message_templates')
@@ -122,7 +125,11 @@ export function SettingsOverview({
           .select('phone_number_id')
           .eq('account_id', acctId)
           .maybeSingle(),
-        fetch('/api/whatsapp/config', { cache: 'no-store' }).then((r) => r.json()),
+        fetch('/api/whatsapp/config', { cache: 'no-store' }).then((r) =>
+          r.ok && r.headers.get('content-type')?.includes('application/json')
+            ? r.json().catch(() => ({}))
+            : {}
+        ),
       ]);
       if (cancelled) return;
       setWhatsapp({

@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
+import { encrypt } from '@/lib/whatsapp/encryption'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
+
 
 // ============ SUPABASE ADMIN CLIENT ============
 
@@ -61,6 +63,29 @@ interface BaileysMessage {
 
 // ============ HELPERS ============
 
+// ============ BAILEYS UNWRAPPERS & FILTERS ============
+
+const PROTOCOL_MESSAGE_TYPES = new Set([
+  'senderKeyDistributionMessage',
+  'protocolMessage',
+  'historySyncNotification',
+  'peerDataOperationRequestMessage',
+  'reactionMessage',
+])
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function unwrapBaileysMessage(m: any): any {
+  if (!m) return m
+  if (m.ephemeralMessage?.message) return unwrapBaileysMessage(m.ephemeralMessage.message)
+  if (m.viewOnceMessage?.message) return unwrapBaileysMessage(m.viewOnceMessage.message)
+  if (m.viewOnceMessageV2?.message) return unwrapBaileysMessage(m.viewOnceMessageV2.message)
+  if (m.documentWithCaptionMessage?.message) return unwrapBaileysMessage(m.documentWithCaptionMessage.message)
+  if (m.deviceSentMessage?.message) return unwrapBaileysMessage(m.deviceSentMessage.message)
+  if (m.editedMessage?.message) return unwrapBaileysMessage(m.editedMessage.message)
+  if (m.protocolMessage?.editedMessage) return unwrapBaileysMessage(m.protocolMessage.editedMessage)
+  return m
+}
+
 /**
  * Extract plain text from a Baileys decoded message object.
  * Only handles the most common content types.
@@ -68,7 +93,7 @@ interface BaileysMessage {
 function extractTextFromBaileysMessage(
   msg: BaileysMessage
 ): { contentText: string | null; contentType: string } {
-  const m = msg.message
+  const m = unwrapBaileysMessage(msg.message)
   if (!m) return { contentText: null, contentType: 'text' }
 
   if (m.conversation) {
@@ -102,6 +127,10 @@ function extractTextFromBaileysMessage(
     const loc = m.locationMessage
     const parts = [loc.name, loc.address, `${loc.degreesLatitude},${loc.degreesLongitude}`].filter(Boolean)
     return { contentText: parts.join(' - '), contentType: 'location' }
+  }
+
+  if (m.stickerMessage) {
+    return { contentText: '[Sticker]', contentType: 'image' }
   }
 
   return { contentText: '[Unsupported message type]', contentType: 'text' }
@@ -208,24 +237,104 @@ async function handleConnectionStatus(
   status: string,
   qr: string | undefined
 ) {
-  // Simply log the connection update.
-  // UI polling will retrieve the current state from the gateway.
   console.log(`[web-session/webhook] Account ${accountId} connection status: ${status}`)
   if (qr) {
     console.log(`[web-session/webhook] QR code available for account ${accountId}`)
   }
-  // Future: broadcast realtime updates via Supabase channel here
+
+  const dbStatus = status === 'connected' ? 'connected' : 'disconnected'
+
+  // Resolve config owner user id
+  const { data: configRow } = await supabaseAdmin()
+    .from('whatsapp_config')
+    .select('user_id')
+    .eq('account_id', accountId)
+    .maybeSingle()
+
+  let configOwnerUserId: string | null = configRow?.user_id || null
+
+  if (!configOwnerUserId) {
+    const { data: memberRow } = await supabaseAdmin()
+      .from('account_members')
+      .select('user_id')
+      .eq('account_id', accountId)
+      .eq('role', 'admin')
+      .limit(1)
+      .maybeSingle()
+    configOwnerUserId = memberRow?.user_id || null
+  }
+
+  if (!configOwnerUserId) {
+    const { data: accountRow } = await supabaseAdmin()
+      .from('accounts')
+      .select('owner_user_id')
+      .eq('id', accountId)
+      .maybeSingle()
+    configOwnerUserId = accountRow?.owner_user_id || null
+  }
+
+  if (!configOwnerUserId) {
+    const { data: profileRow } = await supabaseAdmin()
+      .from('profiles')
+      .select('user_id')
+      .eq('account_id', accountId)
+      .limit(1)
+      .maybeSingle()
+    configOwnerUserId = profileRow?.user_id || null
+  }
+
+  if (!configOwnerUserId) {
+    console.error(`[web-session/webhook] No owner user found for account ${accountId}. Cannot sync connection status.`)
+    return
+  }
+
+  const { data: existingConfig } = await supabaseAdmin()
+    .from('whatsapp_config')
+    .select('id')
+    .eq('account_id', accountId)
+    .maybeSingle()
+
+  if (!existingConfig) {
+    const encryptedPlaceholder = encrypt('linked-phone-placeholder')
+    const { error: insertErr } = await supabaseAdmin()
+      .from('whatsapp_config')
+      .insert({
+        account_id: accountId,
+        user_id: configOwnerUserId,
+        phone_number_id: 'linked-phone',
+        access_token: encryptedPlaceholder,
+        status: dbStatus,
+        connected_at: dbStatus === 'connected' ? new Date().toISOString() : null,
+      })
+    if (insertErr) {
+      console.error('[web-session/webhook] Failed to insert placeholder whatsapp_config:', insertErr)
+    } else {
+      console.log(`[web-session/webhook] Created placeholder config for account ${accountId} (status: ${dbStatus})`)
+    }
+  } else {
+    const { error: updateErr } = await supabaseAdmin()
+      .from('whatsapp_config')
+      .update({
+        phone_number_id: 'linked-phone',
+        status: dbStatus,
+        connected_at: dbStatus === 'connected' ? new Date().toISOString() : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('account_id', accountId)
+    if (updateErr) {
+      console.error('[web-session/webhook] Failed to update whatsapp_config status:', updateErr)
+    } else {
+      console.log(`[web-session/webhook] Updated config status to ${dbStatus} for account ${accountId}`)
+    }
+  }
 }
+
 
 async function handleInboundMessage(
   accountId: string,
   rawMsg: BaileysMessage
 ) {
   const key = rawMsg.key
-
-  // Skip messages sent by us (fromMe=true = outgoing from the linked phone)
-  // We only process inbound customer messages here.
-  if (key.fromMe) return
 
   // Extract sender JID
   const senderJid = key.remoteJid
@@ -236,8 +345,26 @@ async function handleInboundMessage(
   }
 
   const senderPhone = normalizePhone(rawPhone)
-  const senderName = rawMsg.pushName || senderPhone
+  const senderName = key.fromMe ? '' : (rawMsg.pushName || senderPhone)
   const messageId = key.id || `baileys-${Date.now()}`
+
+  // Unwrap any message wrappers (ephemeral, viewOnce, deviceSent, etc.)
+  const unwrappedMessage = unwrapBaileysMessage(rawMsg.message)
+  
+  // If there's no message content, or if it is a protocol/background message, skip it!
+  if (!unwrappedMessage) {
+    console.log('[web-session/webhook] Skipping message with no content:', messageId)
+    return
+  }
+
+  // Check if it's a protocol message we should skip (key distribution, history sync, reaction, etc.)
+  const messageKeys = Object.keys(unwrappedMessage)
+  const isProtocolMessage = messageKeys.some(k => PROTOCOL_MESSAGE_TYPES.has(k))
+  if (isProtocolMessage) {
+    console.log('[web-session/webhook] Skipping protocol message:', messageId, messageKeys)
+    return
+  }
+
   const { contentText, contentType } = extractTextFromBaileysMessage(rawMsg)
 
   // Timestamp: Baileys provides Unix epoch
@@ -266,8 +393,27 @@ async function handleInboundMessage(
       .eq('account_id', accountId)
       .eq('role', 'admin')
       .limit(1)
-      .single()
+      .maybeSingle()
     configOwnerUserId = memberRow?.user_id || null
+  }
+
+  if (!configOwnerUserId) {
+    const { data: accountRow } = await supabaseAdmin()
+      .from('accounts')
+      .select('owner_user_id')
+      .eq('id', accountId)
+      .maybeSingle()
+    configOwnerUserId = accountRow?.owner_user_id || null
+  }
+
+  if (!configOwnerUserId) {
+    const { data: profileRow } = await supabaseAdmin()
+      .from('profiles')
+      .select('user_id')
+      .eq('account_id', accountId)
+      .limit(1)
+      .maybeSingle()
+    configOwnerUserId = profileRow?.user_id || null
   }
 
   if (!configOwnerUserId) {
@@ -307,11 +453,11 @@ async function handleInboundMessage(
 
   const { error: msgError } = await supabaseAdmin().from('messages').insert({
     conversation_id: conversation.id,
-    sender_type: 'customer',
+    sender_type: key.fromMe ? 'agent' : 'customer',
     content_type: dbContentType,
     content_text: contentText,
     message_id: messageId,
-    status: 'delivered',
+    status: key.fromMe ? 'sent' : 'delivered',
     channel: 'whatsapp',
     created_at: messageTimestamp,
   })
@@ -332,13 +478,18 @@ async function handleInboundMessage(
     .update({
       last_message_text: contentText || `[${contentType}]`,
       last_message_at: new Date().toISOString(),
-      unread_count: ((conversation.unread_count as number) || 0) + 1,
+      unread_count: key.fromMe ? 0 : ((conversation.unread_count as number) || 0) + 1,
       updated_at: new Date().toISOString(),
     })
     .eq('id', conversation.id)
 
   if (convError) {
     console.error('[web-session/webhook] Error updating conversation:', convError)
+  }
+
+  if (key.fromMe) {
+    console.log(`[web-session/webhook] Processed outbound message ${messageId} for account ${accountId}`)
+    return
   }
 
   // ============ FLOWS + AUTOMATIONS DISPATCH ============
@@ -383,6 +534,7 @@ async function handleInboundMessage(
   }
 
   console.log(`[web-session/webhook] Processed inbound message ${messageId} for account ${accountId}`)
+
 }
 
 // ============ POST HANDLER ============

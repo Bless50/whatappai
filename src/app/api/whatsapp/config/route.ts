@@ -110,6 +110,35 @@ export async function GET() {
       )
     }
 
+    if (config.phone_number_id === 'linked-phone') {
+      try {
+        const gatewayRes = await fetch(
+          `http://localhost:3001/api/session/status?accountId=${encodeURIComponent(accountId)}`
+        )
+        if (gatewayRes.ok) {
+          const statusData = await gatewayRes.json()
+          const connected = statusData.status === 'connected'
+          return NextResponse.json({
+            connected,
+            provider: 'baileys',
+            status: statusData.status,
+            phone_info: {
+              display_phone_number: 'Linked Phone',
+              verified_name: 'Baileys Session',
+            },
+          })
+        }
+      } catch (err) {
+        console.error('Error fetching Baileys status from gateway:', err)
+      }
+      return NextResponse.json({
+        connected: false,
+        provider: 'baileys',
+        status: 'disconnected',
+        message: 'Could not reach the WhatsApp Gateway. Make sure the sidecar daemon is running.',
+      })
+    }
+
     // Try to decrypt the stored token with the current ENCRYPTION_KEY.
     // If this fails, the key changed (or was never consistent across envs).
     let accessToken: string

@@ -40,6 +40,25 @@ interface SessionData {
 
 const sessions = new Map<string, SessionData>();
 
+// ============ CACHED WHATSAPP VERSION ============
+// Fetched once at startup and reused for all sessions/reconnects.
+// This avoids slow network calls during the critical 515 reconnect window.
+let cachedVersion: [number, number, number] | null = null;
+
+async function getWhatsAppVersion(): Promise<[number, number, number]> {
+  if (cachedVersion) return cachedVersion;
+
+  try {
+    const result = await fetchLatestBaileysVersion();
+    cachedVersion = result.version;
+    console.log(`[Gateway] Fetched WhatsApp Web version: ${cachedVersion}`);
+  } catch (err) {
+    console.warn(`[Gateway] Failed to fetch version, using fallback:`, err);
+    cachedVersion = [2, 3000, 1035194821];
+  }
+  return cachedVersion;
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -87,16 +106,12 @@ async function initSession(accountId: string): Promise<SessionData> {
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
-  // Get latest Baileys version
-  let version: [number, number, number];
-  try {
-    const latest = await fetchLatestBaileysVersion();
-    version = latest.version;
-  } catch {
-    version = [2, 3000, 1015901307]; // fallback version
-  }
+  // Use the cached version (fetched once at startup — no network call here)
+  const version = await getWhatsAppVersion();
+  console.log(`[Gateway] Using WhatsApp Web version: ${version}`);
 
-  // Create WASocket config
+  // Create WASocket config — no custom browser string so Baileys uses its default,
+  // which is what was working for QR code generation before.
   const sock = makeWASocket({
     version,
     printQRInTerminal: false,
@@ -105,6 +120,10 @@ async function initSession(accountId: string): Promise<SessionData> {
       keys: makeCacheableSignalKeyStore(state.keys, logger.child({ level: 'silent' })),
     },
     logger: logger.child({ level: 'silent' }),
+    // Keep the connection alive — prevents silent drops on slow/shared Wi-Fi
+    keepAliveIntervalMs: 30_000,
+    // Abort pairing if no response after 60 seconds (instead of hanging forever)
+    connectTimeoutMs: 60_000,
   });
 
   const sessionData: SessionData = {
@@ -147,25 +166,42 @@ async function initSession(accountId: string): Promise<SessionData> {
 
     if (connection === 'close') {
       const statusCode = (lastDisconnect?.error as { output?: { statusCode?: number } } | undefined)?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+      // 515 = "stream restart required" — WhatsApp sends this immediately after
+      // a QR scan to force the client to restart the stream and complete the
+      // registration handshake. We MUST reconnect within milliseconds or the
+      // ephemeral auth tokens expire and the pairing fails entirely.
+      const isRestartRequired = statusCode === DisconnectReason.restartRequired;
+      const shouldReconnect = !isLoggedOut;
+
       console.log(`[Gateway] Session closed for account: ${accountId}. Reason: ${statusCode}. Reconnecting: ${shouldReconnect}`);
 
       if (shouldReconnect) {
         sessionData.status = 'connecting';
-        sessionData.reconnectAttempts += 1;
-        const delay = Math.min(3000 * Math.pow(2, sessionData.reconnectAttempts), 60000);
-        console.log(`[Gateway] Scheduling reconnect in ${delay}ms for account: ${accountId}`);
-        
-        setTimeout(() => {
-          recreateSession(accountId);
-        }, delay);
+
+        if (isRestartRequired) {
+          // 515 — reconnect immediately to finish the auth handshake.
+          // Do NOT increment reconnectAttempts and do NOT apply backoff.
+          console.log(`[Gateway] Stream restart required for account: ${accountId}. Reconnecting immediately.`);
+          // Zero delay — reconnect immediately. The auth tokens from the QR scan
+          // are ephemeral and expire within seconds.
+          recreateSession(accountId).catch((err) => {
+            console.error(`[Gateway] Immediate reconnect failed for account ${accountId}:`, err);
+          });
+        } else {
+          // Other transient errors — use exponential backoff so we don't hammer servers.
+          sessionData.reconnectAttempts += 1;
+          const delay = Math.min(3000 * Math.pow(2, sessionData.reconnectAttempts - 1), 60000);
+          console.log(`[Gateway] Scheduling reconnect in ${delay}ms for account: ${accountId}`);
+          setTimeout(() => recreateSession(accountId), delay);
+        }
       } else {
+        // Logged out — wipe the session entirely.
         sessionData.status = 'disconnected';
         sessionData.qr = null;
         sessionData.sock = null;
         sessions.delete(accountId);
-        
-        // Clean up session directory
+
         try {
           fs.rmSync(sessionPath, { recursive: true, force: true });
           console.log(`[Gateway] Cleared session credentials for account: ${accountId}`);
@@ -187,7 +223,7 @@ async function initSession(accountId: string): Promise<SessionData> {
     for (const msg of m.messages) {
       // Don't forward status messages or messages without content if unnecessary
       if (!msg.message) continue;
-      
+
       console.log(`[Gateway] Forwarding message ${msg.key.id} for account ${accountId}`);
       await notifyNextJs(accountId, {
         type: 'messages.upsert',
@@ -204,8 +240,15 @@ async function recreateSession(accountId: string) {
   const session = sessions.get(accountId);
   if (session?.sock) {
     try {
+      // Close old socket cleanly so Baileys releases resources
       session.sock.end(undefined);
-    } catch {}
+    } catch { }
+  }
+  // CRITICAL: Reset status to 'disconnected' so the guard in initSession
+  // (line: if session.status !== 'disconnected' return) doesn't block us.
+  if (session) {
+    session.status = 'disconnected';
+    session.sock = null;
   }
   await initSession(accountId);
 }
@@ -308,7 +351,7 @@ app.post('/api/messages/send', async (req, res) => {
     // Format JID: e.g. 1234567890@s.whatsapp.net
     const formattedJid = to.includes('@') ? to : `${to.replace(/\D/g, '')}@s.whatsapp.net`;
     const result = await session.sock.sendMessage(formattedJid, { text });
-    
+
     res.json({
       success: true,
       messageId: result?.key.id || null,

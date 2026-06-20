@@ -112,7 +112,6 @@ function formatDuration(seconds: number): string {
 const OPUS_ENCODER_PATH = "/opus/encoderWorker.min.js";
 
 export function MessageComposer({
-  conversationId,
   sessionExpired,
   onSend,
   onSendMedia,
@@ -341,7 +340,10 @@ export function MessageComposer({
   // upload size limit.
   useEffect(() => {
     if (recording && recordSeconds >= MAX_RECORDING_SECONDS) {
-      stopRecording();
+      const t = setTimeout(() => {
+        stopRecording();
+      }, 0);
+      return () => clearTimeout(t);
     }
   }, [recording, recordSeconds, stopRecording]);
 
