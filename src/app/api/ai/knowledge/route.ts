@@ -40,7 +40,7 @@ export async function GET(request: Request) {
     }
 
     // Optionally count chunks per KB
-    const kbIds = kbs?.map((kb) => kb.id) ?? []
+    const kbIds = kbs?.map((kb: { id: string }) => kb.id) ?? []
     let chunksCounts: Record<string, number> = {}
     if (kbIds.length > 0) {
       const { data: chunks } = await supabaseAdmin()
@@ -48,13 +48,13 @@ export async function GET(request: Request) {
         .select('knowledge_base_id')
         .in('knowledge_base_id', kbIds)
       
-      chunksCounts = chunks?.reduce((acc: Record<string, number>, row) => {
+      chunksCounts = chunks?.reduce((acc: Record<string, number>, row: { knowledge_base_id: string }) => {
         acc[row.knowledge_base_id] = (acc[row.knowledge_base_id] || 0) + 1
         return acc
       }, {}) ?? {}
     }
 
-    const enhancedKbs = kbs?.map(kb => ({
+    const enhancedKbs = kbs?.map((kb: { id: string; name: string; description: string | null; created_at: string; updated_at: string }) => ({
       ...kb,
       chunk_count: chunksCounts[kb.id] || 0
     }))

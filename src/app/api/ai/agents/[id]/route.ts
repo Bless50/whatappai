@@ -116,6 +116,20 @@ export async function PATCH(
       )
       .single()
 
+    // Handle Knowledge Base assignments
+    if ('knowledge_base_ids' in body && Array.isArray(body.knowledge_base_ids)) {
+      const db = supabaseAdmin()
+      await db.from('ai_agent_knowledge_bases').delete().eq('agent_id', id)
+      
+      if (body.knowledge_base_ids.length > 0) {
+        const kbInserts = body.knowledge_base_ids.map((kbId: string) => ({
+          agent_id: id,
+          knowledge_base_id: kbId
+        }))
+        await db.from('ai_agent_knowledge_bases').insert(kbInserts)
+      }
+    }
+
     if (error) {
       if (error.code === 'PGRST116') {
         return NextResponse.json({ error: 'Agent not found' }, { status: 404 })

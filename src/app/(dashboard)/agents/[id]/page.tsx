@@ -13,13 +13,14 @@ import {
   Brain,
   MessageSquare,
   Key,
+  Play,
 } from "lucide-react";
 
-import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { BotPlayground } from "@/components/ai/bot-playground";
 
 // ============================================================
 // Types
@@ -40,6 +41,8 @@ interface AgentDetail {
   has_api_key: boolean;
   created_at: string;
   updated_at: string;
+  account_id?: string;
+  ai_agent_knowledge_bases?: { knowledge_base_id: string }[];
 }
 
 // ============================================================
@@ -61,13 +64,14 @@ const POPULAR_MODELS = [
 // Tabs
 // ============================================================
 
-type TabKey = "general" | "personality" | "model" | "channels";
+type TabKey = "general" | "personality" | "model" | "channels" | "playground";
 
 const TABS: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: "general", label: "General", icon: Settings },
   { key: "personality", label: "Personality", icon: Sparkles },
   { key: "model", label: "Model & API Key", icon: Brain },
   { key: "channels", label: "Channels", icon: MessageSquare },
+  { key: "playground", label: "Playground", icon: Play },
 ];
 
 // ============================================================
@@ -96,6 +100,8 @@ export default function AgentConfigPage() {
   const [channels, setChannels] = useState<string[]>(["whatsapp"]);
   const [takeoverMode, setTakeoverMode] = useState("timeout");
   const [takeoverTimeout, setTakeoverTimeout] = useState(120);
+  const [kbIds, setKbIds] = useState<string[]>([]);
+  const [availableKbs, setAvailableKbs] = useState<{id: string, name: string}[]>([]);
 
   // ============ FETCH AGENT ============
   const fetchAgent = useCallback(async () => {
@@ -116,6 +122,21 @@ export default function AgentConfigPage() {
       setChannels(a.channels ?? ["whatsapp"]);
       setTakeoverMode(a.takeover_mode ?? "timeout");
       setTakeoverTimeout(a.takeover_timeout_minutes ?? 120);
+      
+      // Extract KB IDs
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const kbLinks = (a as any).ai_agent_knowledge_bases ?? [];
+      setKbIds(kbLinks.map((link: any) => link.knowledge_base_id));
+      
+      // Fetch available KBs for this account
+      if (a.account_id) {
+        fetch(`/api/ai/knowledge?account_id=${a.account_id}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.knowledge_bases) setAvailableKbs(data.knowledge_bases);
+          })
+          .catch(console.error);
+      }
     } catch (err) {
       console.error("Failed to load agent:", err);
       toast.error("Agent not found");
@@ -144,6 +165,7 @@ export default function AgentConfigPage() {
         channels,
         takeover_mode: takeoverMode,
         takeover_timeout_minutes: takeoverTimeout,
+        knowledge_base_ids: kbIds,
       };
 
       // Only send API key if user entered a new one
@@ -358,6 +380,35 @@ export default function AgentConfigPage() {
                 hours, and any rules the agent should follow.
               </p>
             </div>
+
+            <div className="space-y-4 pt-4 border-t">
+              <div>
+                <h3 className="text-sm font-medium">Knowledge Bases</h3>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Select which knowledge bases this agent can search for answers.
+                </p>
+                {availableKbs.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic">No knowledge bases created yet.</p>
+                ) : (
+                  <div className="grid gap-3">
+                    {availableKbs.map((kb) => (
+                      <label key={kb.id} className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={kbIds.includes(kb.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) setKbIds([...kbIds, kb.id]);
+                            else setKbIds(kbIds.filter(id => id !== kb.id));
+                          }}
+                          className="h-4 w-4 rounded border-gray-300 text-brand-green focus:ring-brand-green"
+                        />
+                        <span className="font-medium text-sm">{kb.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -526,6 +577,13 @@ export default function AgentConfigPage() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* PLAYGROUND TAB */}
+        {activeTab === "playground" && (
+          <div className="pt-2">
+            <BotPlayground agentId={agentId} />
           </div>
         )}
       </div>

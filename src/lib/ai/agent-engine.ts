@@ -21,7 +21,6 @@ import type {
   AIAgent,
   AIAgentSkill,
   AIDispatchInput,
-  ChatMessage,
   ModelConfig,
   ModelResponse,
   SkillContext,
@@ -114,7 +113,7 @@ export async function executeAgent(
     }
 
     let response: ModelResponse | null = null
-    let currentMessages = [...messages]
+    const currentMessages = [...messages]
     let totalPromptTokens = 0
     let totalCompletionTokens = 0
     let totalCost = 0

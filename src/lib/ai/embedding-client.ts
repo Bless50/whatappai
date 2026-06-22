@@ -6,10 +6,17 @@
  * 2. Generate embeddings via OpenRouter (using text-embedding-3-small)
  */
 
-import { chunk } from 'lodash'
 
 const EMBEDDING_MODEL = 'openai/text-embedding-3-small'
 const OPENROUTER_EMBEDDING_URL = 'https://openrouter.ai/api/v1/embeddings'
+
+function chunkArray<T>(array: T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let i = 0; i < array.length; i += size) {
+    result.push(array.slice(i, i + size));
+  }
+  return result;
+}
 
 interface EmbeddingResult {
   embedding: number[]
@@ -84,7 +91,7 @@ export function splitTextIntoChunks(
     }
 
     // Try to find a logical break point near the chunk size limit
-    let endPos = i + chunkSize
+    const endPos = i + chunkSize
     
     // Look backwards for a sentence boundary (.!?)
     let breakPoint = -1
@@ -134,7 +141,7 @@ export async function processAndEmbedText(
   const chunks = splitTextIntoChunks(text)
   
   // Process in batches of 10 to avoid overwhelming the API
-  const batches = chunk(chunks, 10)
+  const batches = chunkArray(chunks, 10)
   const results: EmbeddingResult[] = []
 
   for (const batch of batches) {

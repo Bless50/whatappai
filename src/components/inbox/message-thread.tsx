@@ -23,6 +23,8 @@ import {
   RefreshCw,
   PanelRightOpen,
   PanelRightClose,
+  Bot,
+  BotOff,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -216,6 +218,40 @@ export function MessageThread({
     }, 700);
   }, [isRefreshing, onRefresh]);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
+
+  // AI Takeover state
+  const [isTogglingAI, setIsTogglingAI] = useState(false);
+
+  const handleToggleAI = useCallback(async () => {
+    if (!conversation?.id || isTogglingAI) return;
+    setIsTogglingAI(true);
+    try {
+      const isCurrentlyActive = conversation.ai_status === "active";
+      const action = isCurrentlyActive ? "pause" : "resume";
+      
+      const res = await fetch("/api/ai/agents/takeover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: conversation.id,
+          action,
+          agent_id: conversation.ai_agent_id,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to toggle AI");
+      toast.success(
+        isCurrentlyActive
+          ? "AI paused. You have taken over the conversation."
+          : "AI resumed. The bot is now handling this conversation."
+      );
+      // Let the realtime subscription catch the update
+    } catch (err) {
+      console.error("AI toggle failed:", err);
+      toast.error("Failed to toggle AI");
+    } finally {
+      setIsTogglingAI(false);
+    }
+  }, [conversation, isTogglingAI]);
 
   // Profiles are bounded by RLS to rows the current user is allowed to
   // see — today that's just the current user, but the dropdown keeps the
@@ -926,6 +962,35 @@ export function MessageThread({
               <RefreshCw
                 className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")}
               />
+            </button>
+          )}
+
+          {/* AI Takeover Toggle */}
+          {conversation?.ai_status && conversation.ai_status !== "disabled" && (
+            <button
+              type="button"
+              onClick={handleToggleAI}
+              disabled={isTogglingAI}
+              aria-label="Toggle AI"
+              title={conversation.ai_status === "active" ? "Pause AI (Take Over)" : "Resume AI"}
+              className={cn(
+                "inline-flex h-7 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors disabled:opacity-60",
+                conversation.ai_status === "active"
+                  ? "bg-brand-green/10 text-brand-green hover:bg-brand-green/20"
+                  : "bg-orange-500/10 text-orange-600 hover:bg-orange-500/20"
+              )}
+            >
+              {conversation.ai_status === "active" ? (
+                <>
+                  <Bot className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">AI Active</span>
+                </>
+              ) : (
+                <>
+                  <BotOff className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">AI Paused</span>
+                </>
+              )}
             </button>
           )}
 

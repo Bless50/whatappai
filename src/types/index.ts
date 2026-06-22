@@ -153,6 +153,9 @@ export interface Conversation {
   last_message_text?: string;
   last_message_at?: string;
   unread_count: number;
+  ai_status?: 'active' | 'paused' | 'disabled';
+  ai_paused_until?: string | null;
+  ai_agent_id?: string | null;
   created_at: string;
   updated_at: string;
   contact?: Contact;
@@ -541,4 +544,29 @@ export interface AutomationLog {
   error_message?: string | null;
   created_at: string;
   contact?: Contact;
+}
+
+// ============================================================
+// AI Knowledge Bases & Agents (AI features)
+// ============================================================
+
+export interface AIKnowledgeBase {
+  id: string;
+  account_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  chunk_count?: number;
+}
+
+export interface AIKnowledgeChunk {
+  id: string;
+  knowledge_base_id: string;
+  content: string;
+  source_type: string;
+  source_name: string | null;
+  token_count: number;
+  embedding?: number[];
+  created_at: string;
 }

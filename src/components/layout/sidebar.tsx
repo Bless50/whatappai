@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import {
+  BookOpen,
   Bot,
   Crown,
   GitBranch,
@@ -95,6 +96,7 @@ const navItems: NavItem[] = [
   { href: "/broadcasts", label: "Broadcasts", icon: Radio },
   { href: "/automations", label: "Automations", icon: Zap },
   { href: "/agents", label: "AI Agents", icon: Bot },
+  { href: "/knowledge-bases", label: "Knowledge Bases", icon: BookOpen },
   { href: "/flows", label: "Flows", icon: Workflow, beta: true },
 ];
 
