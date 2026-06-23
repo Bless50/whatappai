@@ -502,8 +502,8 @@ async function handleInboundMessage(
     // Pause the AI since the business owner has taken over directly from their phone
     if (conversation.ai_status !== 'disabled') {
       try {
-        await pauseAI(conversation.id as string, conversation.ai_agent_id)
-        console.log(`[web-session/webhook] AI agent paused because owner sent message from phone.`)
+        await pauseAI(conversation.id as string, conversation.ai_agent_id as string)
+        console.log(`[web-session/webhook] AI agent paused because owner sent message from phone`)
       } catch (err) {
         console.error('[web-session/webhook] pauseAI threw:', err)
       }
