@@ -55,7 +55,9 @@ export async function GET(
     // Strip the encrypted API key from the response — frontend
     // should never see it. Send a boolean flag instead.
     const hasApiKey = !!(agent.openrouter_key || agent.openrouter_api_key)
-    const { openrouter_key: _ok, openrouter_api_key: _oak, ...safeAgent } = agent
+    const safeAgent = { ...agent }
+    delete safeAgent.openrouter_key
+    delete safeAgent.openrouter_api_key
 
     return NextResponse.json({ agent: { ...safeAgent, has_api_key: hasApiKey } })
   } catch (err) {
@@ -82,6 +84,7 @@ export async function PATCH(
     // Build update object from allowed fields only
     const allowedFields = [
       'name', 'description', 'avatar_url', 'is_active', 'system_prompt',
+      'prompt_personality', 'prompt_goal', 'prompt_general_info',
       'model_name', 'temperature', 'max_tokens', 'channels',
       'takeover_mode', 'takeover_timeout_minutes',
     ]
@@ -111,6 +114,7 @@ export async function PATCH(
       .eq('id', id)
       .select(
         'id, account_id, name, description, is_active, system_prompt, ' +
+        'prompt_personality, prompt_goal, prompt_general_info, ' +
         'model_name, temperature, max_tokens, channels, takeover_mode, ' +
         'takeover_timeout_minutes, updated_at',
       )
@@ -127,6 +131,22 @@ export async function PATCH(
           knowledge_base_id: kbId
         }))
         await db.from('ai_agent_knowledge_bases').insert(kbInserts)
+      }
+    }
+
+    // Handle Skills assignments
+    if ('skills' in body && Array.isArray(body.skills)) {
+      const db = supabaseAdmin()
+      await db.from('ai_agent_skills').delete().eq('agent_id', id)
+      
+      if (body.skills.length > 0) {
+        const skillInserts = body.skills.map((skillType: string) => ({
+          agent_id: id,
+          skill_type: skillType,
+          skill_config: {},
+          is_enabled: true
+        }))
+        await db.from('ai_agent_skills').insert(skillInserts)
       }
     }
 

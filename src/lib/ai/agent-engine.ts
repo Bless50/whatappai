@@ -95,8 +95,19 @@ export async function executeAgent(
     }
 
     // ============ 4. BUILD PROMPT ============
+    let masterPrompt = agent.system_prompt
+    
+    // Stitch the GHL-style structured prompt fields together if any are present
+    if (agent.prompt_personality || agent.prompt_goal || agent.prompt_general_info) {
+      const parts = []
+      if (agent.prompt_personality) parts.push(`## Personality\n${agent.prompt_personality}`)
+      if (agent.prompt_goal) parts.push(`## Goal\n${agent.prompt_goal}`)
+      if (agent.prompt_general_info) parts.push(`## General Information\n${agent.prompt_general_info}`)
+      masterPrompt = parts.join('\n\n')
+    }
+
     const messages = await buildPrompt({
-      systemPrompt: agent.system_prompt,
+      systemPrompt: masterPrompt,
       contactId: input.contactId,
       conversationId: input.conversationId,
       accountId: input.accountId,

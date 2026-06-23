@@ -18,6 +18,8 @@ import {
   ChevronDown,
   Zap,
   X,
+  Info,
+  BarChart3,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -25,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { BotPlayground } from "@/components/ai/bot-playground";
+import { AgentAnalytics } from "@/components/ai/agent-analytics";
 
 // ============================================================
 // Types
@@ -36,6 +39,9 @@ interface AgentDetail {
   description: string | null;
   is_active: boolean;
   system_prompt: string;
+  prompt_personality: string | null;
+  prompt_goal: string | null;
+  prompt_general_info: string | null;
   model_name: string;
   temperature: number;
   max_tokens: number;
@@ -47,6 +53,7 @@ interface AgentDetail {
   updated_at: string;
   account_id?: string;
   ai_agent_knowledge_bases?: { knowledge_base_id: string }[];
+  ai_agent_skills?: { skill_type: string; is_enabled: boolean }[];
 }
 
 interface OpenRouterModel {
@@ -64,14 +71,25 @@ interface OpenRouterModel {
 // Tabs
 // ============================================================
 
-type TabKey = "general" | "personality" | "model" | "channels" | "playground";
+type TabKey = "general" | "personality" | "model" | "channels" | "skills" | "analytics" | "playground";
 
 const TABS: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: "general", label: "General", icon: Settings },
   { key: "personality", label: "Personality", icon: Sparkles },
   { key: "model", label: "Model & API Key", icon: Brain },
   { key: "channels", label: "Channels", icon: MessageSquare },
+  { key: "skills", label: "Skills", icon: Zap },
+  { key: "analytics", label: "Analytics", icon: BarChart3 },
   { key: "playground", label: "Playground", icon: Play },
+];
+
+const AVAILABLE_SKILLS = [
+  { id: "crm_lookup", name: "CRM Lookup", desc: "Allow the AI to search for contact history and details." },
+  { id: "book_appointment", name: "Book Appointment", desc: "Allow the AI to check calendar availability and schedule meetings." },
+  { id: "create_deal", name: "Create Deal", desc: "Allow the AI to automatically create sales pipeline opportunities." },
+  { id: "tag_contact", name: "Tag Contact", desc: "Allow the AI to apply tags to contacts based on the conversation." },
+  { id: "update_contact", name: "Update Contact", desc: "Allow the AI to collect and update contact details (like email or company)." },
+  { id: "escalate", name: "Escalate", desc: "Allow the AI to pause itself and notify the business owner when human help is needed." },
 ];
 
 // ============================================================
@@ -317,6 +335,9 @@ export default function AgentConfigPage() {
   const [description, setDescription] = useState("");
   const [isActive, setIsActive] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState("");
+  const [promptPersonality, setPromptPersonality] = useState("");
+  const [promptGoal, setPromptGoal] = useState("");
+  const [promptGeneralInfo, setPromptGeneralInfo] = useState("");
   const [modelName, setModelName] = useState("");
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(1024);
@@ -325,6 +346,7 @@ export default function AgentConfigPage() {
   const [takeoverMode, setTakeoverMode] = useState("timeout");
   const [takeoverTimeout, setTakeoverTimeout] = useState(120);
   const [kbIds, setKbIds] = useState<string[]>([]);
+  const [skills, setSkills] = useState<string[]>([]);
   const [availableKbs, setAvailableKbs] = useState<{id: string, name: string}[]>([]);
 
   // ============ FETCH AGENT ============
@@ -340,6 +362,9 @@ export default function AgentConfigPage() {
       setDescription(a.description ?? "");
       setIsActive(a.is_active);
       setSystemPrompt(a.system_prompt);
+      setPromptPersonality(a.prompt_personality ?? "");
+      setPromptGoal(a.prompt_goal ?? "");
+      setPromptGeneralInfo(a.prompt_general_info ?? "");
       setModelName(a.model_name);
       setTemperature(a.temperature);
       setMaxTokens(a.max_tokens);
@@ -350,6 +375,12 @@ export default function AgentConfigPage() {
       // Extract KB IDs
       const kbLinks = a.ai_agent_knowledge_bases ?? [];
       setKbIds(kbLinks.map((link) => link.knowledge_base_id));
+      
+      // Extract Enabled Skills
+      const enabledSkills = (a.ai_agent_skills ?? [])
+        .filter((s) => s.is_enabled)
+        .map((s) => s.skill_type);
+      setSkills(enabledSkills);
       
       // Fetch available KBs for this account
       if (a.account_id) {
@@ -383,6 +414,9 @@ export default function AgentConfigPage() {
         description: description || null,
         is_active: isActive,
         system_prompt: systemPrompt,
+        prompt_personality: promptPersonality,
+        prompt_goal: promptGoal,
+        prompt_general_info: promptGeneralInfo,
         model_name: modelName,
         temperature,
         max_tokens: maxTokens,
@@ -390,6 +424,7 @@ export default function AgentConfigPage() {
         takeover_mode: takeoverMode,
         takeover_timeout_minutes: takeoverTimeout,
         knowledge_base_ids: kbIds,
+        skills: skills,
       };
 
       // Only send API key if user entered a new one
@@ -422,6 +457,13 @@ export default function AgentConfigPage() {
   const toggleChannel = (ch: string) => {
     setChannels((prev) =>
       prev.includes(ch) ? prev.filter((c) => c !== ch) : [...prev, ch],
+    );
+  };
+
+  // ============ SKILL TOGGLE ============
+  const toggleSkill = (sk: string) => {
+    setSkills((prev) =>
+      prev.includes(sk) ? prev.filter((s) => s !== sk) : [...prev, sk],
     );
   };
 
@@ -590,21 +632,54 @@ export default function AgentConfigPage() {
               </p>
             </div>
 
-            <div>
-              <label className="mb-1.5 block text-sm font-medium">
-                System Prompt
-              </label>
-              <textarea
-                value={systemPrompt}
-                onChange={(e) => setSystemPrompt(e.target.value)}
-                rows={12}
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder={`Example:\nYou are a friendly sales assistant for [Business Name], a dental clinic in Lagos.\n\nYour job:\n- Answer questions about our services and pricing\n- Help customers book appointments\n- Qualify leads by asking about their needs\n- Be warm, professional, and concise\n\nOur services:\n- Teeth cleaning: ₦15,000\n- Dental checkup: ₦10,000\n- Root canal: ₦50,000-₦80,000\n\nWorking hours: Mon-Fri 9am-5pm, Sat 9am-1pm\nAddress: 123 Victoria Island, Lagos`}
-              />
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                Tip: Include your business name, services, pricing, working
-                hours, and any rules the agent should follow.
-              </p>
+            <div className="grid gap-6">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">
+                  Personality & Tone
+                </label>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  How should the AI act? (e.g., friendly, professional, enthusiastic, uses emojis)
+                </p>
+                <textarea
+                  value={promptPersonality}
+                  onChange={(e) => setPromptPersonality(e.target.value)}
+                  rows={3}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder="Example: You are a friendly, professional sales assistant for [Business Name]. You always use emojis and keep your answers under 3 sentences."
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">
+                  Primary Goal
+                </label>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  What is the AI trying to achieve in this conversation?
+                </p>
+                <textarea
+                  value={promptGoal}
+                  onChange={(e) => setPromptGoal(e.target.value)}
+                  rows={3}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder="Example: Your main goal is to answer questions about our services and naturally guide the user to book a consultation call."
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">
+                  General Information
+                </label>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  What facts, prices, or business rules does the AI need to know?
+                </p>
+                <textarea
+                  value={promptGeneralInfo}
+                  onChange={(e) => setPromptGeneralInfo(e.target.value)}
+                  rows={6}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder={`Example:\n- Teeth cleaning: ₦15,000\n- Dental checkup: ₦10,000\n- Working hours: Mon-Fri 9am-5pm\n- Address: 123 Victoria Island, Lagos`}
+                />
+              </div>
             </div>
 
             <div className="space-y-4 pt-4 border-t">
@@ -797,6 +872,55 @@ export default function AgentConfigPage() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* SKILLS TAB */}
+        {activeTab === "skills" && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-lg font-semibold">Agent Skills</h2>
+              <p className="text-sm text-muted-foreground">
+                Give your AI superpowers. Turn on the specific actions you want this agent to be able to perform autonomously.
+              </p>
+            </div>
+
+            <div className="grid gap-4">
+              {AVAILABLE_SKILLS.map((skill) => (
+                <div
+                  key={skill.id}
+                  className="flex items-start justify-between rounded-lg border p-4 shadow-sm"
+                >
+                  <div className="mr-6">
+                    <p className="font-medium">{skill.name}</p>
+                    <p className="text-sm text-muted-foreground">{skill.desc}</p>
+                  </div>
+                  <Switch
+                    checked={skills.includes(skill.id)}
+                    onCheckedChange={() => toggleSkill(skill.id)}
+                  />
+                </div>
+              ))}
+            </div>
+            
+            <div className="rounded-md bg-blue-50 p-4 border border-blue-200 mt-6">
+              <div className="flex gap-3">
+                <Info className="h-5 w-5 text-blue-500 shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-semibold text-blue-800 mb-1">How Skills Work</h3>
+                  <p className="text-xs text-blue-700 leading-relaxed">
+                    When enabled, the AI uses its judgment to trigger these skills at the right moment. For example, if &apos;Book Appointment&apos; is enabled, the AI will check your default CRM calendar when a customer asks for a meeting. If &apos;Create Deal&apos; is enabled, it will automatically drop leads into the first stage of your default sales pipeline.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ANALYTICS TAB */}
+        {activeTab === "analytics" && (
+          <div className="pt-2">
+            <AgentAnalytics agentId={params.id as string} />
           </div>
         )}
 

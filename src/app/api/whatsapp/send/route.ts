@@ -8,6 +8,7 @@ import {
 } from '@/lib/whatsapp/meta-api'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
 import { supabaseAdmin } from '@/lib/flows/admin-client'
+import { pauseAI } from '@/lib/ai/agent-dispatcher'
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -439,6 +440,15 @@ export async function POST(request: Request) {
         updated_at: new Date().toISOString(),
       })
       .eq('id', conversation_id)
+
+    // Pause any active AI agent on this conversation
+    if (conversation.ai_status !== 'disabled') {
+      try {
+        await pauseAI(conversation_id, conversation.ai_agent_id)
+      } catch (err) {
+        console.error('[whatsapp/send] pauseAI threw:', err)
+      }
+    }
 
     // Pause any active Flow run for this contact — the agent stepping
     // in is the strongest "yield, human is here" signal. See PR #2

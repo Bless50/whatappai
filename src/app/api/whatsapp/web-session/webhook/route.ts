@@ -5,7 +5,7 @@ import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
-import { dispatchToAIAgent } from '@/lib/ai/agent-dispatcher'
+import { dispatchToAIAgent, pauseAI } from '@/lib/ai/agent-dispatcher'
 
 
 // ============ SUPABASE ADMIN CLIENT ============
@@ -449,17 +449,78 @@ async function handleInboundMessage(
     .eq('sender_type', 'customer')
   const isFirstInboundMessage = (priorCustomerMsgCount ?? 0) === 0
 
-  // ============ INSERT MESSAGE ============
   const ALLOWED_CONTENT_TYPES = new Set(['text', 'image', 'document', 'audio', 'video', 'location', 'template', 'interactive'])
   const dbContentType = ALLOWED_CONTENT_TYPES.has(contentType) ? contentType : 'text'
 
+  // ============ HANDLE OUTBOUND MESSAGES (FROM PHONE) ============
+  if (key.fromMe) {
+    // Wait 2 seconds to let the CRM or AI engine insert the message first if they sent it
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+
+    // Check if the message is already in the database
+    const { data: existingMsg } = await supabaseAdmin()
+      .from('messages')
+      .select('id')
+      .eq('message_id', messageId)
+      .maybeSingle()
+
+    if (existingMsg) {
+      // It was sent by the CRM or AI, so they already handled it and saved it.
+      console.log(`[web-session/webhook] Duplicate outbound message ${messageId} skipped (handled by CRM/AI)`)
+      return
+    }
+
+    // If we reach here, the message was typed physically on the user's phone or WhatsApp Web
+    const { error: msgError } = await supabaseAdmin().from('messages').insert({
+      conversation_id: conversation.id,
+      sender_type: 'agent',
+      content_type: dbContentType,
+      content_text: contentText,
+      message_id: messageId,
+      status: 'sent',
+      channel: 'whatsapp',
+      created_at: messageTimestamp,
+    })
+
+    if (msgError) {
+      if (msgError.code === '23505') return
+      console.error('[web-session/webhook] Error inserting phone message:', msgError)
+      return
+    }
+
+    // Update conversation
+    await supabaseAdmin()
+      .from('conversations')
+      .update({
+        last_message_text: contentText || `[${contentType}]`,
+        last_message_at: new Date().toISOString(),
+        unread_count: 0,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', conversation.id)
+
+    // Pause the AI since the business owner has taken over directly from their phone
+    if (conversation.ai_status !== 'disabled') {
+      try {
+        await pauseAI(conversation.id as string, conversation.ai_agent_id)
+        console.log(`[web-session/webhook] AI agent paused because owner sent message from phone.`)
+      } catch (err) {
+        console.error('[web-session/webhook] pauseAI threw:', err)
+      }
+    }
+
+    console.log(`[web-session/webhook] Processed outbound phone message ${messageId} for account ${accountId}`)
+    return
+  }
+
+  // ============ INSERT INBOUND MESSAGE ============
   const { error: msgError } = await supabaseAdmin().from('messages').insert({
     conversation_id: conversation.id,
-    sender_type: key.fromMe ? 'agent' : 'customer',
+    sender_type: 'customer',
     content_type: dbContentType,
     content_text: contentText,
     message_id: messageId,
-    status: key.fromMe ? 'sent' : 'delivered',
+    status: 'delivered',
     channel: 'whatsapp',
     created_at: messageTimestamp,
   })
@@ -467,31 +528,26 @@ async function handleInboundMessage(
   if (msgError) {
     // Duplicate message_id (e.g. gateway retried) — not a fatal error
     if (msgError.code === '23505') {
-      console.log(`[web-session/webhook] Duplicate message ${messageId} skipped`)
+      console.log(`[web-session/webhook] Duplicate inbound message ${messageId} skipped`)
       return
     }
-    console.error('[web-session/webhook] Error inserting message:', msgError)
+    console.error('[web-session/webhook] Error inserting inbound message:', msgError)
     return
   }
 
-  // ============ UPDATE CONVERSATION ============
+  // ============ UPDATE CONVERSATION (INBOUND) ============
   const { error: convError } = await supabaseAdmin()
     .from('conversations')
     .update({
       last_message_text: contentText || `[${contentType}]`,
       last_message_at: new Date().toISOString(),
-      unread_count: key.fromMe ? 0 : ((conversation.unread_count as number) || 0) + 1,
+      unread_count: ((conversation.unread_count as number) || 0) + 1,
       updated_at: new Date().toISOString(),
     })
     .eq('id', conversation.id)
 
   if (convError) {
     console.error('[web-session/webhook] Error updating conversation:', convError)
-  }
-
-  if (key.fromMe) {
-    console.log(`[web-session/webhook] Processed outbound message ${messageId} for account ${accountId}`)
-    return
   }
 
   // ============ FLOWS + AUTOMATIONS DISPATCH ============

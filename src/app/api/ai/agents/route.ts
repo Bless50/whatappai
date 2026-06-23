@@ -41,7 +41,7 @@ export async function GET(request: Request) {
       .from('ai_agents')
       .select(
         'id, account_id, name, description, avatar_url, is_active, ' +
-        'system_prompt, model_name, temperature, max_tokens, channels, ' +
+        'system_prompt, prompt_personality, prompt_goal, prompt_general_info, model_name, temperature, max_tokens, channels, ' +
         'takeover_mode, takeover_timeout_minutes, provider, ' +
         'booking_link, created_at, updated_at',
       )
@@ -83,6 +83,9 @@ export async function POST(request: Request) {
       channels,
       takeover_mode,
       takeover_timeout_minutes,
+      prompt_personality,
+      prompt_goal,
+      prompt_general_info,
     } = body
 
     if (!account_id || !name) {
@@ -102,6 +105,9 @@ export async function POST(request: Request) {
       name,
       description: description ?? null,
       system_prompt: system_prompt ?? 'You are a helpful AI assistant for this business. Be friendly, professional, and concise.',
+      prompt_personality: prompt_personality ?? null,
+      prompt_goal: prompt_goal ?? null,
+      prompt_general_info: prompt_general_info ?? null,
       model_name: model_name ?? 'google/gemini-2.5-flash',
       temperature: temperature ?? 0.7,
       max_tokens: max_tokens ?? 1024,
@@ -117,6 +123,7 @@ export async function POST(request: Request) {
       .insert(insertData)
       .select(
         'id, account_id, name, description, is_active, system_prompt, ' +
+        'prompt_personality, prompt_goal, prompt_general_info, ' +
         'model_name, temperature, max_tokens, channels, takeover_mode, ' +
         'takeover_timeout_minutes, created_at',
       )

@@ -25,6 +25,9 @@ export interface AIAgent {
   avatar_url: string | null;
   is_active: boolean;
   system_prompt: string;
+  prompt_personality: string | null;
+  prompt_goal: string | null;
+  prompt_general_info: string | null;
   model_name: string;
   temperature: number;
   max_tokens: number;
