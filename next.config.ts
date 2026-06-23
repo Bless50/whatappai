@@ -61,11 +61,11 @@ const SECURITY_HEADERS = [
 ] as const;
 
 const nextConfig: NextConfig = {
-  // @ts-expect-error - Next.js types may not include these in some versions
+  // @ts-ignore - Next.js types may not include these in some versions
   eslint: {
     ignoreDuringBuilds: true,
   },
-  // @ts-expect-error - Next.js types may not include these in some versions
+  // @ts-ignore - Next.js types may not include these in some versions
   typescript: {
     ignoreBuildErrors: true,
   },
