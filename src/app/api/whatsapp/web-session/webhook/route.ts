@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
-import { encrypt } from '@/lib/whatsapp/encryption'
+import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
+import { dispatchToAIAgent } from '@/lib/ai/agent-dispatcher'
 
 
 // ============ SUPABASE ADMIN CLIENT ============
@@ -143,7 +144,8 @@ function extractTextFromBaileysMessage(
 function jidToPhone(jid: string | null): string | null {
   if (!jid) return null
   if (jid.endsWith('@g.us') || jid.endsWith('@broadcast')) return null
-  const [phone] = jid.split('@')
+  const [userPart] = jid.split('@')
+  const [phone] = userPart.split(':')
   return phone || null
 }
 
@@ -380,7 +382,7 @@ async function handleInboundMessage(
 
   const { data: configRow } = await supabaseAdmin()
     .from('whatsapp_config')
-    .select('user_id')
+    .select('user_id, access_token')
     .eq('account_id', accountId)
     .maybeSingle()
 
@@ -533,8 +535,23 @@ async function handleInboundMessage(
     }).catch((err) => console.error('[web-session/webhook] automation dispatch failed:', err))
   }
 
-  console.log(`[web-session/webhook] Processed inbound message ${messageId} for account ${accountId}`)
+  // ============ AI AGENT DISPATCH ============
+  if (!flowConsumed) {
+    const rawToken = configRow?.access_token || ''
+    const decryptedAccessToken = rawToken ? decrypt(rawToken) : ''
 
+    dispatchToAIAgent({
+      accountId,
+      conversationId: conversation.id as string,
+      contactId: contactRecord.id as string,
+      messageText: inboundText,
+      userId: configOwnerUserId,
+      accessToken: decryptedAccessToken,
+      channel: 'whatsapp',
+    }).catch((err) => console.error('[web-session/webhook] AI agent dispatch failed:', err))
+  }
+
+  console.log(`[web-session/webhook] Processed inbound message ${messageId} for account ${accountId}`)
 }
 
 // ============ POST HANDLER ============

@@ -86,15 +86,14 @@ export function SettingsOverview({
         ]);
 
       if (cancelled) return;
-
       const members =
         membersRes.status === 'fulfilled' && Array.isArray(membersRes.value?.members)
           ? membersRes.value.members.length
           : null;
       const pendingInvites =
         invitesRes.status === 'fulfilled' &&
-        invitesRes.value &&
-        Array.isArray(invitesRes.value.invitations)
+          invitesRes.value &&
+          Array.isArray(invitesRes.value.invitations)
           ? invitesRes.value.invitations.length
           : null;
 
@@ -161,68 +160,64 @@ export function SettingsOverview({
     loading: boolean;
     subtitle: ReactNode;
   }[] = [
-    {
-      section: 'whatsapp',
-      loading: whatsappLoading,
-      subtitle: !whatsapp?.configured ? (
-        'Not set up yet'
-      ) : whatsapp.connected ? (
-        <>
-          <StatusDot tone="ok" /> Connected
-        </>
-      ) : (
-        <>
-          <StatusDot tone="muted" /> Needs reconnecting
-        </>
-      ),
-    },
-    {
-      section: 'members',
-      loading: countsLoading,
-      subtitle:
-        counts?.members == null
-          ? 'View team members'
-          : `${counts.members} member${counts.members === 1 ? '' : 's'}${
-              counts.pendingInvites
-                ? ` · ${counts.pendingInvites} pending invite${
-                    counts.pendingInvites === 1 ? '' : 's'
-                  }`
-                : ''
+      {
+        section: 'whatsapp',
+        loading: whatsappLoading,
+        subtitle: !whatsapp?.configured ? (
+          'Not set up yet'
+        ) : whatsapp.connected ? (
+          <>
+            <StatusDot tone="ok" /> Connected
+          </>
+        ) : (
+          <>
+            <StatusDot tone="muted" /> Needs reconnecting
+          </>
+        ),
+      },
+      {
+        section: 'members',
+        loading: countsLoading,
+        subtitle:
+          counts?.members == null
+            ? 'View team members'
+            : `${counts.members} member${counts.members === 1 ? '' : 's'}${counts.pendingInvites
+              ? ` · ${counts.pendingInvites} pending invite${counts.pendingInvites === 1 ? '' : 's'
+              }`
+              : ''
             }`,
-    },
-    {
-      section: 'templates',
-      loading: countsLoading,
-      subtitle:
-        counts?.templates == null
-          ? 'Manage message templates'
-          : `${counts.templates} template${counts.templates === 1 ? '' : 's'}${
-              counts.templatesPending
-                ? ` · ${counts.templatesPending} pending review`
-                : ''
+      },
+      {
+        section: 'templates',
+        loading: countsLoading,
+        subtitle:
+          counts?.templates == null
+            ? 'Manage message templates'
+            : `${counts.templates} template${counts.templates === 1 ? '' : 's'}${counts.templatesPending
+              ? ` · ${counts.templatesPending} pending review`
+              : ''
             }`,
-    },
-    {
-      section: 'deals',
-      loading: false,
-      subtitle: `${defaultCurrency} — ${currencyLabel}`,
-    },
-    {
-      section: 'fields',
-      loading: countsLoading,
-      subtitle:
-        counts?.tags == null && counts?.customFields == null
-          ? 'Tags and custom fields'
-          : `${counts?.tags ?? 0} tag${counts?.tags === 1 ? '' : 's'} · ${
-              counts?.customFields ?? 0
+      },
+      {
+        section: 'deals',
+        loading: false,
+        subtitle: `${defaultCurrency} — ${currencyLabel}`,
+      },
+      {
+        section: 'fields',
+        loading: countsLoading,
+        subtitle:
+          counts?.tags == null && counts?.customFields == null
+            ? 'Tags and custom fields'
+            : `${counts?.tags ?? 0} tag${counts?.tags === 1 ? '' : 's'} · ${counts?.customFields ?? 0
             } custom field${counts?.customFields === 1 ? '' : 's'}`,
-    },
-    {
-      section: 'appearance',
-      loading: false,
-      subtitle: `${cap(mode)} mode · ${themeName} accent`,
-    },
-  ];
+      },
+      {
+        section: 'appearance',
+        loading: false,
+        subtitle: `${cap(mode)} mode · ${themeName} accent`,
+      },
+    ];
 
   return (
     <section className="animate-in fade-in-50 duration-200">

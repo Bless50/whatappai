@@ -5,13 +5,13 @@
  */
 
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { buildPrompt } from '@/lib/ai/prompt-builder'
 import { callModel } from '@/lib/ai/model-client'
 import { generateEmbeddings } from '@/lib/ai/embedding-client'
 
-let _admin: any = null
+let _admin: SupabaseClient | null = null
 function supabaseAdmin() {
   if (!_admin) {
     _admin = createClient(
@@ -45,14 +45,33 @@ export async function POST(
     }
 
     const apiKey = agent.openrouter_api_key ?? agent.openrouter_key
+    console.log('[playground] DB columns present:', {
+      has_openrouter_api_key: 'openrouter_api_key' in agent,
+      has_openrouter_key: 'openrouter_key' in agent,
+      apiKey_exists: !!apiKey,
+      apiKey_length: apiKey?.length ?? 0,
+      apiKey_prefix: apiKey?.substring(0, 10) ?? 'N/A',
+    })
     if (!apiKey) {
       return NextResponse.json({ error: 'Agent has no API key configured' }, { status: 400 })
     }
-    const decryptedKey = decrypt(apiKey)
+    let decryptedKey: string
+    try {
+      decryptedKey = decrypt(apiKey)
+      console.log('[playground] Decrypted key prefix:', decryptedKey.substring(0, 12), '... length:', decryptedKey.length)
+    } catch (decryptErr) {
+      console.error('[playground] Failed to decrypt API key:', decryptErr)
+      return NextResponse.json({ error: 'Failed to decrypt API key. Try re-saving it.' }, { status: 500 })
+    }
 
     // 2. RAG - Search Knowledge Bases
     let knowledgeContext: string | undefined
-    let sources: any[] = []
+    interface Source {
+      source_name: string | null
+      source_type: string | null
+      similarity: number
+    }
+    let sources: Source[] = []
     
     const { data: kbLinks } = await db
       .from('ai_agent_knowledge_bases')
@@ -73,13 +92,13 @@ export async function POST(
           })
 
           if (chunks && chunks.length > 0) {
-            sources = chunks.map((c: any) => ({
+            sources = chunks.map((c: { source_name: string | null; source_type: string | null; similarity: number }) => ({
               source_name: c.source_name,
               source_type: c.source_type,
               similarity: c.similarity
             }))
             
-            knowledgeContext = chunks.map((c: any) => 
+            knowledgeContext = chunks.map((c: { content: string; source_name: string | null }) => 
               `${c.content}${c.source_name ? ` (Source: ${c.source_name})` : ''}`
             ).join('\n\n---\n\n')
           }
@@ -104,7 +123,7 @@ export async function POST(
     // For playground, we can just insert the provided history before the final user message.
     const finalMessages = [
       messages[0], // System
-      ...history.map((m: any) => ({ role: m.role, content: m.content })),
+      ...history.map((m: { role: string; content: string }) => ({ role: m.role, content: m.content })),
       messages[messages.length - 1] // User current message
     ]
 

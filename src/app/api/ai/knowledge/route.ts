@@ -6,9 +6,9 @@
  */
 
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-let _admin: any = null
+let _admin: SupabaseClient | null = null
 function supabaseAdmin() {
   if (!_admin) {
     _admin = createClient(

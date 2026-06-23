@@ -202,24 +202,72 @@ export async function executeAgent(
       .maybeSingle()
 
     if (waConfig) {
-      const waAccessToken = decrypt(waConfig.access_token)
+      const contactPhone = await getContactPhone(input.contactId)
+      const sanitizedPhone = contactPhone.replace(/\D/g, '')
 
-      // Send the message via Meta API
-      const sendResult = await sendTextMessage({
-        phoneNumberId: waConfig.phone_number_id,
-        accessToken: waAccessToken,
-        to: await getContactPhone(input.contactId),
-        text: replyText,
-      })
+      let messageId = ''
+
+      if (waConfig.phone_number_id === 'linked-phone') {
+        const gatewayUrl = process.env.WHATSAPP_GATEWAY_URL
+        if (!gatewayUrl) {
+          console.error('[ai/engine] WHATSAPP_GATEWAY_URL environment variable is not defined')
+          return null
+        }
+
+        const sendUrl = gatewayUrl.endsWith('/api/messages/send')
+          ? gatewayUrl
+          : `${gatewayUrl.replace(/\/$/, '')}/api/messages/send`
+
+        const gatewayRes = await fetch(sendUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            accountId: input.accountId,
+            to: sanitizedPhone,
+            text: replyText,
+          }),
+        })
+
+        if (!gatewayRes.ok) {
+          const errData = await gatewayRes.json().catch(() => ({ error: 'Unknown gateway error' }))
+          console.error('[ai/engine] Gateway send failed:', errData.error)
+          
+          // Save the message as failed so the user can still see the AI's response in the CRM
+          await db.from('messages').insert({
+            conversation_id: input.conversationId,
+            sender_type: 'bot',
+            content_type: 'text',
+            content_text: replyText,
+            message_id: `baileys-failed-${Date.now()}`,
+            status: 'failed',
+          })
+          
+          return null
+        }
+
+        const resData = await gatewayRes.json()
+        messageId = resData.messageId || `baileys-${Date.now()}`
+      } else {
+        const waAccessToken = decrypt(waConfig.access_token)
+
+        // Send the message via Meta API
+        const sendResult = await sendTextMessage({
+          phoneNumberId: waConfig.phone_number_id,
+          accessToken: waAccessToken,
+          to: sanitizedPhone,
+          text: replyText,
+        })
+        messageId = sendResult?.messageId ?? ''
+      }
 
       // Insert the bot's message into the messages table
-      if (sendResult?.messageId) {
+      if (messageId) {
         await db.from('messages').insert({
           conversation_id: input.conversationId,
           sender_type: 'bot',
           content_type: 'text',
           content_text: replyText,
-          message_id: sendResult.messageId,
+          message_id: messageId,
           status: 'sent',
         })
 

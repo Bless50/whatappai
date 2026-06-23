@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -14,6 +14,10 @@ import {
   MessageSquare,
   Key,
   Play,
+  Search,
+  ChevronDown,
+  Zap,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -45,20 +49,16 @@ interface AgentDetail {
   ai_agent_knowledge_bases?: { knowledge_base_id: string }[];
 }
 
-// ============================================================
-// Popular models on OpenRouter
-// ============================================================
-
-const POPULAR_MODELS = [
-  { value: "google/gemini-2.5-flash", label: "Gemini 2.5 Flash", provider: "Google" },
-  { value: "google/gemini-2.5-pro", label: "Gemini 2.5 Pro", provider: "Google" },
-  { value: "deepseek/deepseek-chat", label: "DeepSeek V3", provider: "DeepSeek" },
-  { value: "deepseek/deepseek-r1", label: "DeepSeek R1", provider: "DeepSeek" },
-  { value: "openai/gpt-4o-mini", label: "GPT-4o Mini", provider: "OpenAI" },
-  { value: "openai/gpt-4o", label: "GPT-4o", provider: "OpenAI" },
-  { value: "anthropic/claude-sonnet-4", label: "Claude Sonnet 4", provider: "Anthropic" },
-  { value: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B", provider: "Meta" },
-];
+interface OpenRouterModel {
+  id: string;
+  name: string;
+  context_length: number;
+  provider: string;
+  pricing: {
+    prompt: string;
+    completion: string;
+  };
+}
 
 // ============================================================
 // Tabs
@@ -73,6 +73,230 @@ const TABS: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: "channels", label: "Channels", icon: MessageSquare },
   { key: "playground", label: "Playground", icon: Play },
 ];
+
+// ============================================================
+// Model Selector Component
+// ============================================================
+
+function ModelSelector({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (modelId: string) => void;
+}) {
+  const [models, setModels] = useState<OpenRouterModel[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // ============ FETCH MODELS ============
+  useEffect(() => {
+    fetch("/api/ai/models")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.models) setModels(data.models);
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, []);
+
+  // ============ CLOSE ON OUTSIDE CLICK ============
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  // ============ FOCUS SEARCH ON OPEN ============
+  useEffect(() => {
+    if (open && searchRef.current) {
+      searchRef.current.focus();
+    }
+  }, [open]);
+
+  // ============ FILTER MODELS ============
+  const filtered = models.filter(
+    (m) =>
+      m.name.toLowerCase().includes(search.toLowerCase()) ||
+      m.id.toLowerCase().includes(search.toLowerCase()) ||
+      m.provider.toLowerCase().includes(search.toLowerCase()),
+  );
+
+  // ============ GROUP BY PROVIDER ============
+  const grouped = filtered.reduce(
+    (acc, m) => {
+      const provider = m.provider.charAt(0).toUpperCase() + m.provider.slice(1);
+      if (!acc[provider]) acc[provider] = [];
+      acc[provider].push(m);
+      return acc;
+    },
+    {} as Record<string, OpenRouterModel[]>,
+  );
+
+  const selectedModel = models.find((m) => m.id === value);
+
+  // ============ FORMAT PRICE ============
+  const formatPrice = (price: string) => {
+    const num = parseFloat(price);
+    if (num === 0) return "Free";
+    if (num < 0.000001) return `$${(num * 1_000_000).toFixed(3)}/M`;
+    return `$${(num * 1_000_000).toFixed(2)}/M`;
+  };
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      {/* ============ TRIGGER BUTTON ============ */}
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={cn(
+          "flex w-full items-center justify-between rounded-lg border px-3 py-2.5 text-sm transition-colors",
+          "bg-background hover:bg-muted/50",
+          open && "ring-2 ring-primary/30 border-primary/50",
+        )}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <Zap className="h-4 w-4 shrink-0 text-primary" />
+          {loading ? (
+            <span className="text-muted-foreground">Loading models...</span>
+          ) : selectedModel ? (
+            <div className="flex flex-col items-start min-w-0">
+              <span className="truncate font-medium">{selectedModel.name}</span>
+              <span className="text-[11px] text-muted-foreground truncate">
+                {selectedModel.id} • {(selectedModel.context_length / 1000).toFixed(0)}k ctx
+                {selectedModel.pricing && (
+                  <>
+                    {" "}
+                    • {formatPrice(selectedModel.pricing.prompt)} input
+                  </>
+                )}
+              </span>
+            </div>
+          ) : (
+            <span className="truncate">
+              {value || "Select a model..."}
+            </span>
+          )}
+        </div>
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-180",
+          )}
+        />
+      </button>
+
+      {/* ============ DROPDOWN ============ */}
+      {open && (
+        <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-50 max-h-[360px] overflow-hidden rounded-xl border bg-popover shadow-xl animate-in fade-in-0 zoom-in-95">
+          {/* Search */}
+          <div className="sticky top-0 border-b bg-popover p-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+              <input
+                ref={searchRef}
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search 200+ models..."
+                className="w-full rounded-md border bg-background py-2 pl-8 pr-8 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+              />
+              {search && (
+                <button
+                  onClick={() => setSearch("")}
+                  className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Model List */}
+          <div className="max-h-[300px] overflow-y-auto p-1">
+            {Object.keys(grouped).length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                {loading ? "Loading models..." : "No models found"}
+              </div>
+            ) : (
+              Object.entries(grouped)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([provider, providerModels]) => (
+                  <div key={provider}>
+                    <div className="sticky top-0 bg-popover px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {provider}
+                    </div>
+                    {providerModels.map((model) => (
+                      <button
+                        key={model.id}
+                        type="button"
+                        onClick={() => {
+                          onChange(model.id);
+                          setOpen(false);
+                          setSearch("");
+                        }}
+                        className={cn(
+                          "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors",
+                          "hover:bg-muted/70",
+                          value === model.id &&
+                            "bg-primary/10 text-primary",
+                        )}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium">
+                            {model.name}
+                          </div>
+                          <div className="truncate text-[11px] text-muted-foreground">
+                            {model.id}
+                          </div>
+                        </div>
+                        <div className="ml-3 shrink-0 text-right">
+                          <div className="text-[11px] text-muted-foreground">
+                            {(model.context_length / 1000).toFixed(0)}k
+                          </div>
+                          <div className="text-[10px] text-muted-foreground">
+                            {formatPrice(model.pricing.prompt)}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ))
+            )}
+          </div>
+
+          {/* Custom model input */}
+          <div className="border-t bg-popover p-2">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Or type a custom model ID..."
+                className="flex-1 rounded-md border bg-background px-2.5 py-1.5 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.target as HTMLInputElement).value.trim()) {
+                    onChange((e.target as HTMLInputElement).value.trim());
+                    setOpen(false);
+                    setSearch("");
+                  }
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ============================================================
 // Page Component
@@ -124,9 +348,8 @@ export default function AgentConfigPage() {
       setTakeoverTimeout(a.takeover_timeout_minutes ?? 120);
       
       // Extract KB IDs
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const kbLinks = (a as any).ai_agent_knowledge_bases ?? [];
-      setKbIds(kbLinks.map((link: any) => link.knowledge_base_id));
+      const kbLinks = a.ai_agent_knowledge_bases ?? [];
+      setKbIds(kbLinks.map((link) => link.knowledge_base_id));
       
       // Fetch available KBs for this account
       if (a.account_id) {
@@ -147,6 +370,7 @@ export default function AgentConfigPage() {
   }, [agentId, router]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchAgent();
   }, [fetchAgent]);
 
@@ -225,12 +449,14 @@ export default function AgentConfigPage() {
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex items-center gap-2">
-            <Bot className="h-5 w-5 text-primary" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
+              <Bot className="h-4 w-4 text-primary" />
+            </div>
             <h1 className="text-xl font-bold text-foreground">{name || "Agent"}</h1>
           </div>
           <div
             className={cn(
-              "rounded-full px-2 py-0.5 text-xs font-medium",
+              "rounded-full px-2.5 py-0.5 text-xs font-medium",
               isActive
                 ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
                 : "bg-muted text-muted-foreground",
@@ -239,18 +465,18 @@ export default function AgentConfigPage() {
             {isActive ? "Active" : "Inactive"}
           </div>
         </div>
-        <Button onClick={handleSave} disabled={saving}>
+        <Button onClick={handleSave} disabled={saving} className="gap-2">
           {saving ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
-            <Save className="mr-2 h-4 w-4" />
+            <Save className="h-4 w-4" />
           )}
           Save Changes
         </Button>
       </div>
 
       {/* ============ TABS ============ */}
-      <div className="mt-6 flex gap-1 rounded-lg border bg-muted/50 p-1">
+      <div className="mt-6 flex gap-1 rounded-lg border bg-muted/30 p-1">
         {TABS.map((tab) => (
           <button
             key={tab.key}
@@ -258,8 +484,8 @@ export default function AgentConfigPage() {
             className={cn(
               "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-all",
               activeTab === tab.key
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
+                ? "bg-card text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
             )}
           >
             <tab.icon className="h-4 w-4" />
@@ -423,22 +649,13 @@ export default function AgentConfigPage() {
               </p>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-5">
+              {/* ============ MODEL SELECTOR ============ */}
               <div>
                 <label className="mb-1.5 block text-sm font-medium">
                   AI Model
                 </label>
-                <select
-                  value={modelName}
-                  onChange={(e) => setModelName(e.target.value)}
-                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                >
-                  {POPULAR_MODELS.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label} ({m.provider})
-                    </option>
-                  ))}
-                </select>
+                <ModelSelector value={modelName} onChange={setModelName} />
                 <p className="mt-1.5 text-xs text-muted-foreground">
                   Powered by{" "}
                   <a
@@ -453,6 +670,7 @@ export default function AgentConfigPage() {
                 </p>
               </div>
 
+              {/* ============ API KEY ============ */}
               <div>
                 <label className="mb-1.5 block text-sm font-medium">
                   OpenRouter API Key
@@ -485,6 +703,7 @@ export default function AgentConfigPage() {
                 </p>
               </div>
 
+              {/* ============ TEMPERATURE ============ */}
               <div>
                 <label className="mb-1.5 block text-sm font-medium">
                   Temperature: {temperature.toFixed(1)}
@@ -504,6 +723,7 @@ export default function AgentConfigPage() {
                 </div>
               </div>
 
+              {/* ============ MAX TOKENS ============ */}
               <div>
                 <label className="mb-1.5 block text-sm font-medium">
                   Max Response Length (tokens)

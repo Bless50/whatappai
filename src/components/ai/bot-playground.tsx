@@ -1,16 +1,21 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Bot, User, Loader2, Info } from "lucide-react";
+import { Send, Bot, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 
+interface MessageSource {
+  source_name?: string;
+  source_type?: string;
+}
+
 interface Message {
   role: "user" | "assistant" | "system";
   content: string;
-  sources?: any[];
+  sources?: MessageSource[];
 }
 
 export function BotPlayground({ agentId }: { agentId: string }) {
@@ -75,7 +80,7 @@ export function BotPlayground({ agentId }: { agentId: string }) {
   return (
     <div className="flex h-[600px] gap-6">
       {/* Phone Mockup / Chat Interface */}
-      <div className="flex flex-col w-full max-w-sm rounded-[2rem] border-[8px] border-muted bg-background shadow-xl overflow-hidden relative">
+      <div className="flex flex-col w-full max-w-sm rounded-[2rem] border-[3px] border-border bg-card shadow-xl overflow-hidden relative">
         {/* Header */}
         <div className="bg-brand-green p-4 flex items-center gap-3 text-white">
           <div className="bg-white/20 p-2 rounded-full">
@@ -88,7 +93,7 @@ export function BotPlayground({ agentId }: { agentId: string }) {
         </div>
 
         {/* Messages */}
-        <ScrollArea className="flex-1 p-4 bg-slate-50 dark:bg-slate-900" ref={scrollRef}>
+        <ScrollArea className="flex-1 p-4 bg-background" ref={scrollRef}>
           <div className="flex flex-col gap-4 pb-4">
             {messages.map((msg, i) => (
               <div 
@@ -103,7 +108,7 @@ export function BotPlayground({ agentId }: { agentId: string }) {
                   className={`px-4 py-2.5 rounded-2xl ${
                     msg.role === "user" 
                       ? "bg-brand-green text-white rounded-br-sm" 
-                      : "bg-white dark:bg-slate-800 border shadow-sm rounded-bl-sm"
+                      : "bg-card border shadow-sm rounded-bl-sm"
                   }`}
                 >
                   {msg.content}
@@ -124,7 +129,7 @@ export function BotPlayground({ agentId }: { agentId: string }) {
             
             {isTyping && (
               <div className="flex w-max max-w-[85%] flex-col gap-1 text-sm">
-                <div className="px-4 py-3 rounded-2xl bg-white dark:bg-slate-800 border shadow-sm rounded-bl-sm flex items-center gap-1">
+                <div className="px-4 py-3 rounded-2xl bg-card border shadow-sm rounded-bl-sm flex items-center gap-1">
                   <div className="h-1.5 w-1.5 bg-muted-foreground/50 rounded-full animate-bounce" />
                   <div className="h-1.5 w-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:0.2s]" />
                   <div className="h-1.5 w-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:0.4s]" />

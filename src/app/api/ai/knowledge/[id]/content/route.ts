@@ -7,12 +7,12 @@
  */
 
 import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { parsePdf, scrapeUrl, formatFaq } from '@/lib/ai/knowledge-parsers'
 import { processAndEmbedText } from '@/lib/ai/embedding-client'
 
-let _admin: any = null
+let _admin: SupabaseClient | null = null
 function supabaseAdmin() {
   if (!_admin) {
     _admin = createClient(
