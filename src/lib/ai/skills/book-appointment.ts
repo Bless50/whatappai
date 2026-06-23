@@ -166,6 +166,49 @@ export const bookAppointmentSkill: SkillDefinition = {
           }
         }
 
+        // --- Push to Google Calendar if connected ---
+        try {
+          const { data: gcalAccount } = await db
+            .from('connected_accounts')
+            .select('*')
+            .eq('account_id', context.accountId)
+            .eq('provider', 'google')
+            .single()
+
+          if (gcalAccount && gcalAccount.refresh_token) {
+            // Import google dynamically to avoid cold start overhead if not used
+            const { google } = await import('googleapis')
+            const oauth2Client = new google.auth.OAuth2(
+              process.env.GOOGLE_CLIENT_ID,
+              process.env.GOOGLE_CLIENT_SECRET
+            )
+            oauth2Client.setCredentials({
+              access_token: gcalAccount.access_token,
+              refresh_token: gcalAccount.refresh_token
+            })
+
+            const calendarApi = google.calendar({ version: 'v3', auth: oauth2Client })
+            
+            await calendarApi.events.insert({
+              calendarId: 'primary',
+              requestBody: {
+                summary: title,
+                description: notes || 'Booked via AI Agent',
+                start: { dateTime: startDate.toISOString() },
+                end: { dateTime: endDate.toISOString() }
+              }
+            })
+            
+            // Note: If tokens refresh during this call, we ideally should save them back to DB,
+            // but the googleapis library handles auto-refresh internally if refresh_token is set.
+            // For a robust production app, listen to oauth2Client.on('tokens', ...) and update DB.
+          }
+        } catch (gcalErr) {
+          console.error("Failed to sync with Google Calendar:", gcalErr)
+          // We don't fail the AI booking if GCal sync fails, but we log it
+        }
+        // ---------------------------------------------
+
         const formattedDate = startDate.toLocaleDateString('en-US', {
           weekday: 'long',
           year: 'numeric',

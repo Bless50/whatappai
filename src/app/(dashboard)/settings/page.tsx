@@ -16,6 +16,7 @@ import { TemplateManager } from '@/components/settings/template-manager';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
 import { MembersTab } from '@/components/settings/members-tab';
+import { IntegrationsPanel } from '@/components/settings/integrations-panel';
 import {
   resolveSection,
   type SettingsSection,
@@ -61,6 +62,7 @@ export default function SettingsPage() {
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,
     members: <MembersTab />,
+    integrations: <IntegrationsPanel />,
   };
 
   return (
