@@ -14,7 +14,7 @@ const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
 
-const PORT = process.env.PORT_WHATSAPP_GATEWAY || 3001;
+const PORT = process.env.PORT || process.env.PORT_WHATSAPP_GATEWAY || 3001;
 const NEXTJS_WEBHOOK_URL = process.env.NEXTJS_WEBHOOK_URL || 'http://localhost:3000/api/whatsapp/web-session/webhook';
 const GATEWAY_SECRET = process.env.WHATSAPP_GATEWAY_SECRET || 'gateway-secret-token-abcdef-123456';
 
