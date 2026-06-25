@@ -85,6 +85,10 @@ async function initSession(accountId: string): Promise<SessionData> {
         '--disable-renderer-backgrounding'
       ],
     },
+    webVersionCache: {
+      type: 'remote',
+      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+    }
   });
 
   const sessionData: SessionData = {
