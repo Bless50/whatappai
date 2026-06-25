@@ -19,9 +19,10 @@ interface GatewayStatusResponse {
 
 // Gateway base URL — reads from env or falls back to localhost:3001
 const GATEWAY_URL =
-  typeof window !== 'undefined'
+  process.env.NEXT_PUBLIC_WHATSAPP_GATEWAY_URL ||
+  (typeof window !== 'undefined'
     ? `${window.location.protocol}//${window.location.hostname}:3001`
-    : 'http://localhost:3001';
+    : 'http://localhost:3001');
 
 // ============ COMPONENT ============
 
