@@ -73,7 +73,7 @@ async function initSession(accountId: string): Promise<SessionData> {
     }),
     puppeteer: {
       headless: true,
-      executablePath: 'C:\\Users\\bless\\.cache\\puppeteer\\chrome\\win64-150.0.7871.24\\chrome-win64\\chrome.exe',
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
