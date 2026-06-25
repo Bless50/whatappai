@@ -87,6 +87,11 @@ async function initSession(accountId: string): Promise<SessionData> {
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
+        '--js-flags=--max-old-space-size=256',
+        '--disable-extensions',
+        '--disable-default-apps',
+        '--mute-audio',
+        '--no-first-run',
         '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
       ],
     }
