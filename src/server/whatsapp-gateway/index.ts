@@ -4,18 +4,15 @@ import path from 'node:path';
 import fs from 'node:fs';
 import dotenv from 'dotenv';
 import QRCode from 'qrcode';
-import pkg from 'whatsapp-web.js';
-import type { Message } from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg;
+import { default as makeWASocket, DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
+import type { AnyMessageContent } from '@whiskeysockets/baileys';
+import pino from 'pino';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: path.resolve(__dirname, '../../../.env.local') });
-
-// Force puppeteer-core to use the local cache directory (since it ignores .puppeteerrc.cjs)
-process.env.PUPPETEER_CACHE_DIR = path.resolve(__dirname, '../../../.cache/puppeteer');
 
 const PORT = process.env.PORT || process.env.PORT_WHATSAPP_GATEWAY || 3001;
 const NEXTJS_WEBHOOK_URL = process.env.NEXTJS_WEBHOOK_URL || 'http://localhost:3000/api/whatsapp/web-session/webhook';
@@ -28,7 +25,7 @@ if (!fs.existsSync(sessionsDir)) {
 }
 
 interface SessionData {
-  client: InstanceType<typeof Client> | null;
+  client: ReturnType<typeof makeWASocket> | null;
   qr: string | null;
   status: 'disconnected' | 'connecting' | 'connected' | 'qr_ready';
 }
@@ -67,105 +64,86 @@ async function initSession(accountId: string): Promise<SessionData> {
     return existingSession;
   }
 
-  console.log(`[Gateway] Initializing whatsapp-web.js session for account: ${accountId}`);
+  console.log(`[Gateway] Initializing Baileys session for account: ${accountId}`);
 
-  const client = new Client({
-    authStrategy: new LocalAuth({
-      clientId: accountId,
-      dataPath: sessionsDir,
-    }),
-    puppeteer: {
-      headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-zygote',
-        '--single-process',
-        '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-renderer-backgrounding',
-        '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
-      ],
-    }
+  const accountSessionDir = path.join(sessionsDir, `session-${accountId}`);
+  
+  // Baileys multi-file auth handles keys and session state securely
+  const { state, saveCreds } = await useMultiFileAuthState(accountSessionDir);
+
+  const sock = makeWASocket({
+    auth: state,
+    printQRInTerminal: false,
+    logger: pino({ level: 'silent' }) as any, // Mute baileys noisy logs
+    browser: ['waCRM', 'Chrome', '1.0.0'], // Bypass bot detection naturally
   });
 
   const sessionData: SessionData = {
-    client,
+    client: sock,
     qr: null,
     status: 'connecting',
   };
   sessions.set(accountId, sessionData);
 
-  client.on('qr', async (qr) => {
-    try {
-      const qrDataUri = await QRCode.toDataURL(qr);
-      sessionData.qr = qrDataUri;
-      sessionData.status = 'qr_ready';
-      console.log(`[Gateway] QR code generated for account: ${accountId}`);
-      await notifyNextJs(accountId, { type: 'connection.status', status: 'qr_ready', qr: qrDataUri });
-    } catch (err) {
-      console.error(`[Gateway] Error generating QR code for account ${accountId}:`, err);
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+    
+    if (qr) {
+      try {
+        const qrDataUri = await QRCode.toDataURL(qr);
+        sessionData.qr = qrDataUri;
+        sessionData.status = 'qr_ready';
+        console.log(`[Gateway] QR code generated for account: ${accountId}`);
+        await notifyNextJs(accountId, { type: 'connection.status', status: 'qr_ready', qr: qrDataUri });
+      } catch (err) {
+        console.error(`[Gateway] Error generating QR code for account ${accountId}:`, err);
+      }
+    }
+
+    if (connection === 'close') {
+      const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log(`[Gateway] Session closed for account: ${accountId}. Reconnect? ${shouldReconnect}`);
+      
+      if (shouldReconnect) {
+        // Automatically reconnect after a small delay
+        sessionData.status = 'connecting';
+        setTimeout(() => initSession(accountId), 5000);
+      } else {
+        sessionData.status = 'disconnected';
+        sessionData.qr = null;
+        sessionData.client = null;
+        sessions.delete(accountId);
+        
+        // Wipe auth folder on explicit logout
+        if (fs.existsSync(accountSessionDir)) {
+          fs.rmSync(accountSessionDir, { recursive: true, force: true });
+        }
+        
+        await notifyNextJs(accountId, { type: 'connection.status', status: 'disconnected' });
+      }
+    } else if (connection === 'open') {
+      sessionData.status = 'connected';
+      sessionData.qr = null;
+      console.log(`[Gateway] Session connected for account: ${accountId}`);
+      await notifyNextJs(accountId, { type: 'connection.status', status: 'connected' });
     }
   });
 
-  client.on('ready', async () => {
-    sessionData.status = 'connected';
-    sessionData.qr = null;
-    console.log(`[Gateway] Session connected for account: ${accountId}`);
-    await notifyNextJs(accountId, { type: 'connection.status', status: 'connected' });
+  sock.ev.on('messages.upsert', async (m) => {
+    for (const msg of m.messages) {
+      // Skip status broadcast
+      if (msg.key.remoteJid === 'status@broadcast') continue;
+      
+      console.log(`[Gateway] Forwarding message ${msg.key.id} for account ${accountId}`);
+      // Send raw Baileys message object; Next.js frontend expects this exact format!
+      await notifyNextJs(accountId, {
+        type: 'messages.upsert',
+        message: msg,
+      });
+    }
   });
-
-  client.on('disconnected', async (reason) => {
-    console.log(`[Gateway] Session disconnected for account: ${accountId}. Reason: ${reason}`);
-    sessionData.status = 'disconnected';
-    sessionData.qr = null;
-    sessionData.client = null;
-    sessions.delete(accountId);
-    await notifyNextJs(accountId, { type: 'connection.status', status: 'disconnected' });
-  });
-
-  // Handle incoming / outgoing messages
-  // whatsapp-web.js uses 'message_create' for both incoming and outgoing
-  client.on('message_create', async (msg: Message) => {
-    // Skip status broadcasts
-    if (msg.from === 'status@broadcast' || msg.to === 'status@broadcast') return;
-    
-    const isFromMe = msg.fromMe;
-    const remoteJid = (isFromMe ? msg.to : msg.from).replace('@c.us', '@s.whatsapp.net');
-    
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const notifyName = (msg as any)._data?.notifyName || null;
-    
-    const baileysMsg = {
-      key: {
-        remoteJid,
-        fromMe: isFromMe,
-        id: msg.id.id,
-        participant: msg.author || undefined,
-      },
-      message: {
-        conversation: msg.type === 'chat' ? msg.body : undefined,
-        extendedTextMessage: msg.type === 'chat' ? { text: msg.body } : undefined,
-      },
-      messageTimestamp: msg.timestamp,
-      pushName: notifyName,
-    };
-
-    console.log(`[Gateway] Forwarding message ${msg.id.id} for account ${accountId}`);
-    await notifyNextJs(accountId, {
-      type: 'messages.upsert',
-      message: baileysMsg,
-    });
-  });
-
-  try {
-    client.initialize();
-  } catch (err) {
-    console.error(`[Gateway] Failed to initialize client for account ${accountId}:`, err);
-  }
 
   return sessionData;
 }
@@ -215,17 +193,16 @@ app.post('/api/session/disconnect', async (req, res) => {
   if (session && session.client) {
     try {
       await session.client.logout();
-      await session.client.destroy();
     } catch (err) {
       console.error(`[Gateway] Error logging out for account ${accountId}:`, err);
     }
   }
   
-  // Clean up directory created by LocalAuth
-  const sessionPath = path.join(sessionsDir, `session-${accountId}`);
-  if (fs.existsSync(sessionPath)) {
+  // Wipe auth folder
+  const accountSessionDir = path.join(sessionsDir, `session-${accountId}`);
+  if (fs.existsSync(accountSessionDir)) {
     try {
-      fs.rmSync(sessionPath, { recursive: true, force: true });
+      fs.rmSync(accountSessionDir, { recursive: true, force: true });
     } catch (err) {
       console.error(`[Gateway] Failed to delete session directory for account ${accountId}:`, err);
     }
@@ -248,56 +225,22 @@ app.post('/api/messages/send', async (req, res) => {
     return;
   }
   try {
-    let formattedJid = to.replace('@s.whatsapp.net', '@c.us');
-    if (!formattedJid.includes('@')) {
-      formattedJid = `${formattedJid.replace(/\D/g, '')}@c.us`;
+    let targetJid = to.replace('@c.us', '@s.whatsapp.net');
+    if (!targetJid.includes('@')) {
+      targetJid = `${targetJid.replace(/\D/g, '')}@s.whatsapp.net`;
     }
     
-    console.log(`[Gateway] Resolving contact ID for ${formattedJid}...`);
-    const contactId = await session.client.getNumberId(formattedJid);
-    let targetJid = contactId ? contactId._serialized : formattedJid;
+    console.log(`[Gateway] Sending message to JID: ${targetJid} for account ${accountId}`);
     
-    // Workaround: Force the client to initialize the contact and chat in its internal IndexedDB to avoid "No LID for user" errors
-    try {
-      await session.client.getContactById(targetJid);
-    } catch (e) {
-      console.warn(`[Gateway] Could not pre-fetch contact for ${targetJid}:`, e);
-    }
+    const content: AnyMessageContent = { text: text };
+    const result = await session.client.sendMessage(targetJid, content);
     
-    try {
-      await session.client.getChatById(targetJid);
-    } catch (e) {
-      const errMessage = e instanceof Error ? e.message : String(e);
-      console.warn(`[Gateway] Could not pre-fetch chat for ${targetJid}:`, errMessage);
-      if (errMessage.includes('No LID for user') && targetJid.includes('@c.us')) {
-        console.log(`[Gateway] Falling back to @lid format for chat pre-fetch...`);
-        targetJid = targetJid.replace('@c.us', '@lid');
-      }
-    }
-    
-    console.log(`[Gateway] Sending message to resolved JID: ${targetJid} for account ${accountId}`);
-    console.log(`[Gateway] Message content:`, text);
-    
-    // send message
-    let result;
-    try {
-      result = await session.client.sendMessage(targetJid, text);
-    } catch (e) {
-      const errMessage = e instanceof Error ? e.message : String(e);
-      if (errMessage.includes('No LID for user') && targetJid.includes('@c.us')) {
-        console.log(`[Gateway] sendMessage failed with No LID, retrying with @lid format...`);
-        targetJid = targetJid.replace('@c.us', '@lid');
-        result = await session.client.sendMessage(targetJid, text);
-      } else {
-        throw e;
-      }
-    }
-    console.log(`[Gateway] Message sent successfully. Result ID:`, result.id.id);
+    console.log(`[Gateway] Message sent successfully. Result ID:`, result?.key?.id);
 
     res.json({
       success: true,
-      messageId: result.id.id,
-      timestamp: result.timestamp || Math.floor(Date.now() / 1000),
+      messageId: result?.key?.id,
+      timestamp: result?.messageTimestamp || Math.floor(Date.now() / 1000),
     });
   } catch (err) {
     const error = err as Error;
@@ -309,7 +252,6 @@ app.post('/api/messages/send', async (req, res) => {
 async function restoreSavedSessions() {
   try {
     const dirs = fs.readdirSync(sessionsDir).filter((file) => {
-      // whatsapp-web.js LocalAuth creates folders named "session-<clientId>"
       return file.startsWith('session-') && fs.statSync(path.join(sessionsDir, file)).isDirectory();
     });
     console.log(`[Gateway] Found ${dirs.length} session folders. Restoring sessions...`);
@@ -326,7 +268,7 @@ async function restoreSavedSessions() {
 
 app.listen(PORT, () => {
   console.log(`=======================================================`);
-  console.log(`[Gateway] WhatsApp Web Session sidecar daemon running (whatsapp-web.js)`);
+  console.log(`[Gateway] WhatsApp Baileys Engine running`);
   console.log(`          Port: ${PORT}`);
   console.log(`          Webhook URL: ${NEXTJS_WEBHOOK_URL}`);
   console.log(`=======================================================`);
