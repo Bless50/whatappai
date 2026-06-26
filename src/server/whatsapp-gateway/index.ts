@@ -73,7 +73,7 @@ async function notifyNextJs(accountId: string, payload: Record<string, unknown>)
 
 async function initSession(accountId: string): Promise<SessionData> {
   const existingSession = sessions.get(accountId);
-  if (existingSession && existingSession.status !== 'disconnected') {
+  if (existingSession && existingSession.client) {
     return existingSession;
   }
 
@@ -124,7 +124,11 @@ async function initSession(accountId: string): Promise<SessionData> {
 
     if (connection === 'close') {
       const shouldReconnect = (lastDisconnect?.error as any)?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log(`[Gateway] Session closed for account: ${accountId}. Reconnect? ${shouldReconnect}`);
+      console.log(`[Gateway] Session closed for account: ${accountId}. Reconnect? ${shouldReconnect}. Error:`, lastDisconnect?.error);
+      
+      // Clean up connection references
+      sessionData.client = null;
+      sessionData.qr = null;
       
       if (shouldReconnect) {
         // Automatically reconnect after a small delay
