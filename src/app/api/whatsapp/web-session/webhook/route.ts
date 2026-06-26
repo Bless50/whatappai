@@ -580,15 +580,19 @@ async function handleInboundMessage(
   if (isFirstInboundMessage) automationTriggers.unshift('first_inbound_message')
 
   for (const triggerType of automationTriggers) {
-    runAutomationsForTrigger({
-      accountId,
-      triggerType,
-      contactId: contactRecord.id as string,
-      context: {
-        message_text: inboundText,
-        conversation_id: conversation.id as string,
-      },
-    }).catch((err) => console.error('[web-session/webhook] automation dispatch failed:', err))
+    try {
+      await runAutomationsForTrigger({
+        accountId,
+        triggerType,
+        contactId: contactRecord.id as string,
+        context: {
+          message_text: inboundText,
+          conversation_id: conversation.id as string,
+        },
+      })
+    } catch (err) {
+      console.error('[web-session/webhook] automation dispatch failed:', err)
+    }
   }
 
   // ============ AI AGENT DISPATCH ============
@@ -596,15 +600,19 @@ async function handleInboundMessage(
     const rawToken = configRow?.access_token || ''
     const decryptedAccessToken = rawToken ? decrypt(rawToken) : ''
 
-    dispatchToAIAgent({
-      accountId,
-      conversationId: conversation.id as string,
-      contactId: contactRecord.id as string,
-      messageText: inboundText,
-      userId: configOwnerUserId,
-      accessToken: decryptedAccessToken,
-      channel: 'whatsapp',
-    }).catch((err) => console.error('[web-session/webhook] AI agent dispatch failed:', err))
+    try {
+      await dispatchToAIAgent({
+        accountId,
+        conversationId: conversation.id as string,
+        contactId: contactRecord.id as string,
+        messageText: inboundText,
+        userId: configOwnerUserId,
+        accessToken: decryptedAccessToken,
+        channel: 'whatsapp',
+      })
+    } catch (err) {
+      console.error('[web-session/webhook] AI agent dispatch failed:', err)
+    }
   }
 
   console.log(`[web-session/webhook] Processed inbound message ${messageId} for account ${accountId}`)
@@ -632,25 +640,21 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'accountId and type are required' }, { status: 400 })
   }
 
-  // Process event types asynchronously — always respond 200 OK quickly
-  // to not block the gateway's forwarding loop.
-  ;(async () => {
-    try {
-      if (eventType === 'connection.status') {
-        await handleConnectionStatus(
-          accountId,
-          body.status as string,
-          body.qr as string | undefined
-        )
-      } else if (eventType === 'messages.upsert') {
-        await handleInboundMessage(accountId, body.message as BaileysMessage)
-      } else {
-        console.log(`[web-session/webhook] Unhandled event type: ${eventType}`)
-      }
-    } catch (err) {
-      console.error(`[web-session/webhook] Unhandled error processing event ${eventType}:`, err)
+  try {
+    if (eventType === 'connection.status') {
+      await handleConnectionStatus(
+        accountId,
+        body.status as string,
+        body.qr as string | undefined
+      )
+    } else if (eventType === 'messages.upsert') {
+      await handleInboundMessage(accountId, body.message as BaileysMessage)
+    } else {
+      console.log(`[web-session/webhook] Unhandled event type: ${eventType}`)
     }
-  })()
+  } catch (err) {
+    console.error(`[web-session/webhook] Unhandled error processing event ${eventType}:`, err)
+  }
 
   return NextResponse.json({ ok: true })
 }
