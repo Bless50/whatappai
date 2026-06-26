@@ -258,6 +258,19 @@ export async function executeAgent(
 
         const resData = await gatewayRes.json()
         messageId = resData.messageId || `baileys-${Date.now()}`
+
+        // Insert the AI's reply into the DB immediately!
+        // If we don't, the webhook will receive the "fromMe" echo from WhatsApp,
+        // assume the business owner physically typed it on their phone, and pause the AI!
+        await db.from('messages').insert({
+          conversation_id: input.conversationId,
+          sender_type: 'bot',
+          content_type: 'text',
+          content_text: replyText,
+          message_id: messageId,
+          status: 'sent',
+          channel: 'whatsapp',
+        })
       } else {
         const waAccessToken = decrypt(waConfig.access_token)
 
