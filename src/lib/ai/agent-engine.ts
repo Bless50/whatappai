@@ -229,39 +229,12 @@ export async function executeAgent(
           ? gatewayUrl
           : `${gatewayUrl.replace(/\/$/, '')}/api/messages/send`
 
-        const gatewayRes = await fetch(sendUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            accountId: input.accountId,
-            to: sanitizedPhone,
-            text: replyText,
-          }),
-        })
+        // Generate a messageId FIRST so we can insert it into the database immediately.
+        // This completely eliminates the race condition where the WhatsApp echo
+        // arrives at the webhook before the HTTP request returns.
+        messageId = `3EB0${crypto.randomUUID().replace(/-/g, '').substring(0, 18).toUpperCase()}`
 
-        if (!gatewayRes.ok) {
-          const errData = await gatewayRes.json().catch(() => ({ error: 'Unknown gateway error' }))
-          console.error('[ai/engine] Gateway send failed:', errData.error)
-          
-          // Save the message as failed so the user can still see the AI's response in the CRM
-          await db.from('messages').insert({
-            conversation_id: input.conversationId,
-            sender_type: 'bot',
-            content_type: 'text',
-            content_text: replyText,
-            message_id: `baileys-failed-${Date.now()}`,
-            status: 'failed',
-          })
-          
-          return null
-        }
-
-        const resData = await gatewayRes.json()
-        messageId = resData.messageId || `baileys-${Date.now()}`
-
-        // Insert the AI's reply into the DB immediately!
-        // If we don't, the webhook will receive the "fromMe" echo from WhatsApp,
-        // assume the business owner physically typed it on their phone, and pause the AI!
+        // Insert the AI's reply into the DB BEFORE sending it!
         await db.from('messages').insert({
           conversation_id: input.conversationId,
           sender_type: 'bot',
@@ -271,6 +244,26 @@ export async function executeAgent(
           status: 'sent',
           channel: 'whatsapp',
         })
+
+        const gatewayRes = await fetch(sendUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            accountId: input.accountId,
+            to: sanitizedPhone,
+            text: replyText,
+            messageId: messageId,
+          }),
+        })
+
+        if (!gatewayRes.ok) {
+          const errData = await gatewayRes.json().catch(() => ({ error: 'Unknown gateway error' }))
+          console.error('[ai/engine] Gateway send failed:', errData.error)
+          
+          // Update the message to failed
+          await db.from('messages').update({ status: 'failed' }).eq('message_id', messageId)
+          return null
+        }
       } else {
         const waAccessToken = decrypt(waConfig.access_token)
 

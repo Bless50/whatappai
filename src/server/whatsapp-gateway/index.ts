@@ -249,7 +249,7 @@ app.post('/api/session/disconnect', async (req, res) => {
 });
 
 app.post('/api/messages/send', async (req, res) => {
-  const { accountId, to, text } = req.body;
+  const { accountId, to, text, messageId } = req.body;
   if (!accountId || !to || !text) {
     res.status(400).json({ error: 'accountId, to, and text are required in body' });
     return;
@@ -268,7 +268,11 @@ app.post('/api/messages/send', async (req, res) => {
     console.log(`[Gateway] Sending message to JID: ${targetJid} for account ${accountId}`);
     
     const content: AnyMessageContent = { text: text };
-    const result = await session.client.sendMessage(targetJid, content);
+    
+    // If a custom messageId is provided, pass it to Baileys options
+    const options = messageId ? { messageId } : undefined;
+    
+    const result = await session.client.sendMessage(targetJid, content, options);
     
     console.log(`[Gateway] Message sent successfully. Result ID:`, result?.key?.id);
 

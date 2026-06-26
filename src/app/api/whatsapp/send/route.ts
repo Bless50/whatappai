@@ -204,6 +204,22 @@ export async function POST(request: Request) {
         ? gatewayUrl
         : `${gatewayUrl.replace(/\/$/, '')}/api/messages/send`
 
+      waMessageId = `3EB0${crypto.randomUUID().replace(/-/g, '').substring(0, 18).toUpperCase()}`
+
+      // Insert immediately to prevent webhook echo race conditions
+      const { error: insertError } = await supabase.from('messages').insert({
+        conversation_id: conversation.id,
+        sender_type: 'agent',
+        content_type: message_type,
+        content_text,
+        message_id: waMessageId,
+        status: 'sent',
+        channel: 'whatsapp',
+      })
+      if (insertError) {
+        console.error('[whatsapp/send] DB insert error:', insertError)
+      }
+
       try {
         const gatewayRes = await fetch(sendUrl, {
           method: 'POST',
@@ -212,17 +228,17 @@ export async function POST(request: Request) {
             accountId,
             to: sanitizedPhone,
             text: content_text,
+            messageId: waMessageId,
           }),
         })
 
         if (!gatewayRes.ok) {
           const errData = await gatewayRes.json().catch(() => ({ error: 'Unknown gateway error' }))
+          await supabase.from('messages').update({ status: 'failed' }).eq('message_id', waMessageId)
           return NextResponse.json({ error: errData.error }, { status: 502 })
         }
-
-        const resData = await gatewayRes.json()
-        waMessageId = resData.messageId || `baileys-${Date.now()}`
       } catch (err) {
+        await supabase.from('messages').update({ status: 'failed' }).eq('message_id', waMessageId)
         return NextResponse.json(
           { error: `Could not reach WhatsApp Gateway: ${(err as Error).message}` },
           { status: 502 }
@@ -403,32 +419,37 @@ export async function POST(request: Request) {
         .eq('id', contact.id)
     }
 
-    // Insert message into DB — field names MUST match the messages schema
-    // (see supabase/migrations/001_initial_schema.sql):
-    //   conversation_id, sender_type, content_type, content_text,
-    //   media_url, template_name, message_id, status, created_at
-    const { data: messageRecord, error: msgError } = await supabase
-      .from('messages')
-      .insert({
-        conversation_id,
-        sender_type: 'agent',
-        content_type: message_type,
-        content_text: content_text || null,
-        media_url: media_url || null,
-        template_name: template_name || null,
-        message_id: waMessageId,
-        status: 'sent',
-        reply_to_message_id: reply_to_message_id || null,
-      })
-      .select()
-      .single()
+    // For Meta API, we insert the message into the DB here.
+    // For linked-phone, it was already inserted BEFORE the gateway call to prevent race conditions.
+    let isLinkedPhone = config.phone_number_id === 'linked-phone'
+    if (!isLinkedPhone) {
+      // Insert message into DB — field names MUST match the messages schema
+      // (see supabase/migrations/001_initial_schema.sql):
+      //   conversation_id, sender_type, content_type, content_text,
+      //   media_url, template_name, message_id, status, created_at
+      const { data: messageRecord, error: msgError } = await supabase
+        .from('messages')
+        .insert({
+          conversation_id,
+          sender_type: 'agent',
+          content_type: message_type,
+          content_text: content_text || null,
+          media_url: media_url || null,
+          template_name: template_name || null,
+          message_id: waMessageId,
+          status: 'sent',
+          reply_to_message_id: reply_to_message_id || null,
+        })
+        .select()
+        .single()
 
-    if (msgError) {
-      console.error('Error inserting sent message:', msgError)
-      return NextResponse.json(
-        { error: `Message sent to Meta but failed to save to DB: ${msgError.message}` },
-        { status: 500 }
-      )
+      if (msgError) {
+        console.error('Error inserting sent message:', msgError)
+        return NextResponse.json(
+          { error: `Message sent to Meta but failed to save to DB: ${msgError.message}` },
+          { status: 500 }
+        )
+      }
     }
 
     // Update conversation
