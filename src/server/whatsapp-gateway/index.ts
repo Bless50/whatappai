@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import dotenv from 'dotenv';
 import QRCode from 'qrcode';
-import type { AnyMessageContent } from '@whiskeysockets/baileys';
+import makeWASocket, { DisconnectReason, useMultiFileAuthState, type AnyMessageContent } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import { fileURLToPath } from 'node:url';
 
@@ -65,10 +65,6 @@ async function initSession(accountId: string): Promise<SessionData> {
 
   console.log(`[Gateway] Initializing Baileys session for account: ${accountId}`);
 
-  // DYNAMIC IMPORT TO FIX RENDER TSX MODULE RESOLUTION BUGS
-  const baileys = await import('@whiskeysockets/baileys');
-  const makeWASocket = baileys.default?.default || baileys.default?.makeWASocket || baileys.makeWASocket || baileys.default || baileys;
-  const { DisconnectReason, useMultiFileAuthState } = baileys.default || baileys;
 
   const accountSessionDir = path.join(sessionsDir, `session-${accountId}`);
   
@@ -77,12 +73,7 @@ async function initSession(accountId: string): Promise<SessionData> {
 
   let sock: any;
   try {
-    sock = typeof makeWASocket === 'function' ? makeWASocket({
-      auth: state,
-      printQRInTerminal: false,
-      logger: pino({ level: 'silent' }) as any, // Mute baileys noisy logs
-      browser: ['waCRM', 'Chrome', '1.0.0'], // Bypass bot detection naturally
-    }) : (makeWASocket as any).default({
+    sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
       logger: pino({ level: 'silent' }) as any, // Mute baileys noisy logs
@@ -90,7 +81,6 @@ async function initSession(accountId: string): Promise<SessionData> {
     });
   } catch (err) {
     console.error('[Gateway] Failed to execute makeWASocket!', err);
-    console.log('[Gateway] Dump of makeWASocket type:', typeof makeWASocket);
     throw err;
   }
 
