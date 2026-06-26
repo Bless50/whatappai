@@ -392,7 +392,7 @@ export function MessageThread({
   // (not at the page level) keeps the channel scoped to the visible
   // conversation and avoids cross-conversation chatter on a busy inbox.
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId || !user) return;
     const supabase = createClient();
 
     const channel = supabase
@@ -459,7 +459,7 @@ export function MessageThread({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [conversationId]);
+  }, [conversationId, user]);
 
   // Clear any in-progress reply draft when the active conversation changes —
   // a quote pulled from conversation A shouldn't bleed into conversation B.

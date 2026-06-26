@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useAuth } from "@/hooks/use-auth";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
 import { ContactSidebar } from "@/components/inbox/contact-sidebar";
@@ -17,6 +18,8 @@ import { cn } from "@/lib/utils";
 const CONTACT_PANEL_STORAGE_KEY = "wacrm:inbox:contact-panel-open";
 
 export default function InboxPage() {
+  const { user, loading } = useAuth();
+
   const router = useRouter();
   const searchParams = useSearchParams();
   /**
@@ -157,15 +160,10 @@ export default function InboxPage() {
 
   // Check WhatsApp connection status on mount
   useEffect(() => {
+    if (!user) return;
+
     const checkConnection = async () => {
       const supabase = createClient();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const user = session?.user;
-
-      if (!user) return;
-
       // whatsapp_config is one-row-per-account post-multi-user, so
       // the previous `.eq('user_id', user.id)` would miss the row
       // for any teammate who didn't personally save the config —
@@ -193,7 +191,7 @@ export default function InboxPage() {
     };
 
     checkConnection();
-  }, []);
+  }, [user]);
 
   // Handle realtime message events
   const handleMessageEvent = useCallback(
@@ -328,7 +326,7 @@ export default function InboxPage() {
     channelName: "inbox-realtime",
     onMessageEvent: handleMessageEvent,
     onConversationEvent: handleConversationEvent,
-    enabled: true,
+    enabled: !loading && !!user,
   });
 
   /**
