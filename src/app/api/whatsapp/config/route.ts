@@ -112,8 +112,9 @@ export async function GET() {
 
     if (config.phone_number_id === 'linked-phone') {
       try {
+        const gatewayUrl = process.env.WHATSAPP_GATEWAY_URL || 'http://localhost:3001'
         const gatewayRes = await fetch(
-          `http://localhost:3001/api/session/status?accountId=${encodeURIComponent(accountId)}`
+          `${gatewayUrl.replace(/\/$/, '')}/api/session/status?accountId=${encodeURIComponent(accountId)}`
         )
         if (gatewayRes.ok) {
           const statusData = await gatewayRes.json()
