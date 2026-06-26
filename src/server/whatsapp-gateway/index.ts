@@ -5,7 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import dotenv from 'dotenv';
 import QRCode from 'qrcode';
-import { makeWASocket, DisconnectReason, useMultiFileAuthState, type AnyMessageContent } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestWaWebVersion, type AnyMessageContent } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import { fileURLToPath } from 'node:url';
 
@@ -85,9 +85,20 @@ async function initSession(accountId: string): Promise<SessionData> {
   // Baileys multi-file auth handles keys and session state securely
   const { state, saveCreds } = await useMultiFileAuthState(accountSessionDir);
 
+  // Dynamically fetch the latest WhatsApp Web version to prevent 405 Method Not Allowed / Connection Failure errors
+  let version: [number, number, number] = [2, 3000, 1042186019]; // Default fallback
+  try {
+    const { version: latestVersion } = await fetchLatestWaWebVersion({});
+    version = latestVersion;
+    console.log(`[Gateway] Fetched latest WhatsApp Web version: ${version.join('.')}`);
+  } catch {
+    console.warn(`[Gateway] Failed to fetch latest WhatsApp Web version, using fallback: ${version.join('.')}`);
+  }
+
   let sock: any;
   try {
     sock = makeWASocket({
+      version,
       auth: state,
       printQRInTerminal: false,
       logger: pino({ level: 'silent' }) as any, // Mute baileys noisy logs
