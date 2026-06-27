@@ -61,11 +61,11 @@ const SECURITY_HEADERS = [
 ] as const;
 
 const nextConfig: NextConfig = {
-  // @ts-ignore - Next.js types may not include these in some versions
+  // @ts-expect-error - Next.js types may not include these in some versions
   eslint: {
     ignoreDuringBuilds: true,
   },
-  // @ts-ignore - Next.js types may not include these in some versions
+  // @ts-expect-error - Next.js types may not include these in some versions
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -128,6 +128,19 @@ const nextConfig: NextConfig = {
         // policy don't hurt).
         source: "/:path*",
         headers: [...SECURITY_HEADERS],
+      },
+    ];
+  },
+  async rewrites() {
+    const gatewayPort = process.env.PORT_WHATSAPP_GATEWAY || "3001";
+    return [
+      {
+        source: "/api/session/:path*",
+        destination: `http://localhost:${gatewayPort}/api/session/:path*`,
+      },
+      {
+        source: "/api/messages/:path*",
+        destination: `http://localhost:${gatewayPort}/api/messages/:path*`,
       },
     ];
   },
