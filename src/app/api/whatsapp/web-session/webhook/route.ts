@@ -458,11 +458,38 @@ async function handleInboundMessage(
     await new Promise((resolve) => setTimeout(resolve, 2000))
 
     // Check if the message is already in the database
-    const { data: existingMsg } = await supabaseAdmin()
+    let { data: existingMsg } = await supabaseAdmin()
       .from('messages')
-      .select('id')
+      .select('id, sender_type')
       .eq('message_id', messageId)
       .maybeSingle()
+
+    // ============ FALLBACK CONTENT CHECK ============
+    if (!existingMsg && contentText) {
+      // Look for a message sent in this conversation by 'bot' or 'agent'
+      // with the same content within the last 30 seconds.
+      const thirtySecondsAgo = new Date(Date.now() - 30000).toISOString()
+      const { data: recentMsg } = await supabaseAdmin()
+        .from('messages')
+        .select('id, message_id, sender_type')
+        .eq('conversation_id', conversation.id)
+        .in('sender_type', ['bot', 'agent'])
+        .eq('content_text', contentText)
+        .gte('created_at', thirtySecondsAgo)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (recentMsg) {
+        console.log(`[web-session/webhook] Matched outbound message by content fallback. Updating message_id from ${recentMsg.message_id} to ${messageId}`)
+        await supabaseAdmin()
+          .from('messages')
+          .update({ message_id: messageId })
+          .eq('id', recentMsg.id)
+        
+        existingMsg = { id: recentMsg.id, sender_type: recentMsg.sender_type }
+      }
+    }
 
     if (existingMsg) {
       // It was sent by the CRM or AI, so they already handled it and saved it.

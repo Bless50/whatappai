@@ -77,6 +77,8 @@ export async function POST(request: Request) {
       reply_to_message_id,
     } = body
 
+    let messageRecordId: string | undefined = undefined
+
     if (!conversation_id || !message_type) {
       return NextResponse.json(
         { error: 'conversation_id and message_type are required' },
@@ -207,15 +209,24 @@ export async function POST(request: Request) {
       waMessageId = `3EB0${crypto.randomUUID().replace(/-/g, '').substring(0, 18).toUpperCase()}`
 
       // Insert immediately to prevent webhook echo race conditions
-      const { error: insertError } = await supabase.from('messages').insert({
-        conversation_id: conversation.id,
-        sender_type: 'agent',
-        content_type: message_type,
-        content_text,
-        message_id: waMessageId,
-        status: 'sent',
-        channel: 'whatsapp',
-      })
+      const { data: insertedMsg, error: insertError } = await supabase
+        .from('messages')
+        .insert({
+          conversation_id: conversation.id,
+          sender_type: 'agent',
+          content_type: message_type,
+          content_text,
+          message_id: waMessageId,
+          status: 'sent',
+          channel: 'whatsapp',
+        })
+        .select('id')
+        .single()
+
+      if (insertedMsg) {
+        messageRecordId = insertedMsg.id
+      }
+
       if (insertError) {
         console.error('[whatsapp/send] DB insert error:', insertError)
       }
@@ -236,6 +247,16 @@ export async function POST(request: Request) {
           const errData = await gatewayRes.json().catch(() => ({ error: 'Unknown gateway error' }))
           await supabase.from('messages').update({ status: 'failed' }).eq('message_id', waMessageId)
           return NextResponse.json({ error: errData.error }, { status: 502 })
+        }
+
+        // ============ UPDATE REAL MESSAGE ID FROM GATEWAY ============
+        const resData = await gatewayRes.json().catch(() => null)
+        if (resData?.success && resData.messageId && resData.messageId !== waMessageId) {
+          console.log(`[whatsapp/send] Updating message_id from generated ${waMessageId} to real ${resData.messageId}`)
+          await supabase
+            .from('messages')
+            .update({ message_id: resData.messageId })
+            .eq('message_id', waMessageId)
         }
       } catch (err) {
         await supabase.from('messages').update({ status: 'failed' }).eq('message_id', waMessageId)
@@ -421,7 +442,7 @@ export async function POST(request: Request) {
 
     // For Meta API, we insert the message into the DB here.
     // For linked-phone, it was already inserted BEFORE the gateway call to prevent race conditions.
-    let isLinkedPhone = config.phone_number_id === 'linked-phone'
+    const isLinkedPhone = config.phone_number_id === 'linked-phone'
     if (!isLinkedPhone) {
       // Insert message into DB — field names MUST match the messages schema
       // (see supabase/migrations/001_initial_schema.sql):
@@ -442,6 +463,10 @@ export async function POST(request: Request) {
         })
         .select()
         .single()
+
+      if (messageRecord) {
+        messageRecordId = messageRecord.id
+      }
 
       if (msgError) {
         console.error('Error inserting sent message:', msgError)
@@ -504,7 +529,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      message_id: messageRecord.id,
+      message_id: messageRecordId,
       whatsapp_message_id: waMessageId,
     })
   } catch (error) {

@@ -264,6 +264,17 @@ export async function executeAgent(
           await db.from('messages').update({ status: 'failed' }).eq('message_id', messageId)
           return null
         }
+
+        // ============ UPDATE REAL MESSAGE ID FROM GATEWAY ============
+        const resData = await gatewayRes.json().catch(() => null)
+        if (resData?.success && resData.messageId && resData.messageId !== messageId) {
+          console.log(`[ai/engine] Updating message_id from generated ${messageId} to real ${resData.messageId}`)
+          await db
+            .from('messages')
+            .update({ message_id: resData.messageId })
+            .eq('message_id', messageId)
+          messageId = resData.messageId
+        }
       } else {
         const waAccessToken = decrypt(waConfig.access_token)
 
@@ -275,20 +286,22 @@ export async function executeAgent(
           text: replyText,
         })
         messageId = sendResult?.messageId ?? ''
+
+        // Insert the bot's message into the messages table (only for Meta API, since linked-phone inserts before sending)
+        if (messageId) {
+          await db.from('messages').insert({
+            conversation_id: input.conversationId,
+            sender_type: 'bot',
+            content_type: 'text',
+            content_text: replyText,
+            message_id: messageId,
+            status: 'sent',
+          })
+        }
       }
 
-      // Insert the bot's message into the messages table
+      // Update conversation's last message
       if (messageId) {
-        await db.from('messages').insert({
-          conversation_id: input.conversationId,
-          sender_type: 'bot',
-          content_type: 'text',
-          content_text: replyText,
-          message_id: messageId,
-          status: 'sent',
-        })
-
-        // Update conversation's last message
         await db
           .from('conversations')
           .update({
