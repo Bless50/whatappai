@@ -252,7 +252,6 @@ export async function executeAgent(
             accountId: input.accountId,
             to: sanitizedPhone,
             text: replyText,
-            messageId: messageId,
           }),
         })
 

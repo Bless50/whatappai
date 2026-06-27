@@ -239,7 +239,6 @@ export async function POST(request: Request) {
             accountId,
             to: sanitizedPhone,
             text: content_text,
-            messageId: waMessageId,
           }),
         })
 
