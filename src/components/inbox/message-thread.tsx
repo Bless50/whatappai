@@ -192,7 +192,6 @@ export function MessageThread({
     };
     checkConfig();
   }, [user]);
-
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
