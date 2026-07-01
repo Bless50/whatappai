@@ -20,6 +20,7 @@
 // ============================================================
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import crypto from 'crypto';
 
 import {
   sendTextMessage,
@@ -234,214 +235,349 @@ export async function sendMessageToConversation(
     );
   }
 
-  const accessToken = decrypt(config.access_token);
-
-  // Self-heal legacy CBC ciphertexts. Fire-and-forget; idempotent.
-  if (isLegacyFormat(config.access_token)) {
-    void db
-      .from('whatsapp_config')
-      .update({ access_token: encrypt(accessToken) })
-      .eq('id', config.id)
-      .then(({ error }: { error: { message: string } | null }) => {
-        if (error) {
-          console.warn(
-            '[send-message] access_token GCM upgrade failed:',
-            error.message
-          );
-        }
-      });
-  }
-
-  // Resolve the reply target to its Meta message_id. The parent must
-  // belong to this same conversation — otherwise a caller could quote
-  // messages they can't see by guessing UUIDs.
-  let contextMessageId: string | undefined;
-  if (replyToMessageId) {
-    const { data: parent, error: parentError } = await db
-      .from('messages')
-      .select('message_id, conversation_id')
-      .eq('id', replyToMessageId)
-      .eq('conversation_id', conversationId)
-      .maybeSingle();
-
-    if (parentError || !parent) {
+  if (config.phone_number_id === 'linked-phone') {
+    if (messageType !== 'text') {
       throw new SendMessageError(
         'bad_request',
-        'reply_to_message_id not found in this conversation',
+        'Linked Phone integration currently only supports text messages.',
         400
       );
     }
-    if (!parent.message_id) {
-      console.warn(
-        '[send-message] reply target has no Meta message_id; sending without context'
-      );
-    } else {
-      contextMessageId = parent.message_id;
-    }
-  }
 
-  // Template row (for header + button components). isMessageTemplate
-  // guards against a malformed local row crashing the send-builder.
-  let templateRow: MessageTemplate | null = null;
-  if (messageType === 'template' && templateName) {
-    const { data } = await db
-      .from('message_templates')
-      .select('*')
-      .eq('account_id', accountId)
-      .eq('name', templateName)
-      .eq('language', templateLanguage || 'en_US')
-      .maybeSingle();
-    if (data && !isMessageTemplate(data)) {
+    const gatewayUrl = process.env.WHATSAPP_GATEWAY_URL;
+    if (!gatewayUrl) {
+      console.error(
+        '[send-message] WHATSAPP_GATEWAY_URL environment variable is not defined'
+      );
       throw new SendMessageError(
-        'template_malformed',
-        'Template row is malformed locally — run "Sync from Meta" in Settings to repair it.',
+        'internal',
+        'WhatsApp Gateway URL is not configured.',
         500
       );
     }
-    templateRow = data ?? null;
-  }
 
-  const attempt = async (phone: string): Promise<string> => {
-    if (messageType === 'template') {
-      const result = await sendTemplateMessage({
-        phoneNumberId: config.phone_number_id,
-        accessToken,
-        to: phone,
-        templateName: templateName!,
-        language: templateLanguage || 'en_US',
-        template: templateRow ?? undefined,
-        messageParams: templateMessageParams ?? undefined,
-        params: templateParams || [],
-        contextMessageId,
-      });
-      return result.messageId;
+    const sendUrl = gatewayUrl.endsWith('/api/messages/send')
+      ? gatewayUrl
+      : `${gatewayUrl.replace(/\/$/, '')}/api/messages/send`;
+
+    const waMessageIdPlaceholder = `3EB0${crypto.randomUUID().replace(/-/g, '').substring(0, 18).toUpperCase()}`;
+
+    // Insert immediately to prevent webhook echo race conditions
+    const { data: messageRecord, error: msgError } = await db
+      .from('messages')
+      .insert({
+        conversation_id: conversationId,
+        sender_type: 'agent',
+        content_type: messageType,
+        content_text: contentText || null,
+        message_id: waMessageIdPlaceholder,
+        status: 'sent',
+        channel: 'whatsapp',
+      })
+      .select()
+      .single();
+
+    if (msgError || !messageRecord) {
+      console.error('[send-message] DB insert error for linked-phone:', msgError);
+      throw new SendMessageError(
+        'db_error',
+        `Failed to save message to DB: ${msgError?.message}`,
+        500
+      );
     }
-    if (isMediaKind) {
-      const result = await sendMediaMessage({
-        phoneNumberId: config.phone_number_id,
-        accessToken,
-        to: phone,
-        kind: messageType as MediaKind,
-        link: mediaUrl!,
-        caption: contentText || undefined,
-        filename: filename || undefined,
-        contextMessageId,
+
+    let finalMessageId = waMessageIdPlaceholder;
+
+    try {
+      const gatewayRes = await fetch(sendUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountId,
+          to: sanitizedPhone,
+          text: contentText,
+        }),
       });
-      return result.messageId;
-    }
-    const result = await sendTextMessage({
-      phoneNumberId: config.phone_number_id,
-      accessToken,
-      to: phone,
-      text: contentText!,
-      contextMessageId,
-    });
-    return result.messageId;
-  };
 
-  // Send via Meta — retry across phone-number variants if Meta rejects
-  // with "recipient not in allowed list"; persist a working variant
-  // back to the contact so the next send goes straight through.
-  let waMessageId = '';
-  let workingPhone = sanitizedPhone;
-  try {
-    const variants = phoneVariants(sanitizedPhone);
-    let lastError: unknown = null;
-
-    for (const variant of variants) {
-      try {
-        waMessageId = await attempt(variant);
-        workingPhone = variant;
-        lastError = null;
-        break;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (!isRecipientNotAllowedError(message)) {
-          throw err;
-        }
-        lastError = err;
-        console.warn(
-          `[send-message] variant "${variant}" rejected by Meta, trying next…`
+      if (!gatewayRes.ok) {
+        const errData = await gatewayRes.json().catch(() => ({ error: 'Unknown gateway error' }));
+        await db
+          .from('messages')
+          .update({ status: 'failed' })
+          .eq('message_id', waMessageIdPlaceholder);
+        throw new SendMessageError(
+          'meta_error',
+          errData.error || 'Unknown gateway error',
+          502
         );
+      }
+
+      const resData = await gatewayRes.json().catch(() => null);
+      if (resData?.success && resData.messageId && resData.messageId !== waMessageIdPlaceholder) {
+        console.log(
+          `[send-message] Updating message_id from generated ${waMessageIdPlaceholder} to real ${resData.messageId}`
+        );
+        await db
+          .from('messages')
+          .update({ message_id: resData.messageId })
+          .eq('message_id', waMessageIdPlaceholder);
+        finalMessageId = resData.messageId;
+      }
+    } catch (err) {
+      await db
+        .from('messages')
+        .update({ status: 'failed' })
+        .eq('message_id', waMessageIdPlaceholder);
+      if (err instanceof SendMessageError) throw err;
+      throw new SendMessageError(
+        'meta_error',
+        `Could not reach WhatsApp Gateway: ${(err as Error).message}`,
+        502
+      );
+    }
+
+    await db
+      .from('conversations')
+      .update({
+        last_message_text: contentText || `[${messageType}]`,
+        last_message_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', conversationId);
+
+    // Pause any active Flow run for this contact
+    try {
+      const { error: pauseErr } = await supabaseAdmin()
+        .from('flow_runs')
+        .update({
+          status: 'paused_by_agent',
+          ended_at: new Date().toISOString(),
+          end_reason: 'agent_replied',
+        })
+        .eq('account_id', accountId)
+        .eq('contact_id', contact.id)
+        .eq('status', 'active');
+      if (pauseErr) {
+        console.error('[flows] pause-on-agent-send failed:', pauseErr.message);
+      }
+    } catch (err) {
+      console.error(
+        '[flows] pause-on-agent-send threw:',
+        err instanceof Error ? err.message : err
+      );
+    }
+
+    return { messageId: messageRecord.id, whatsappMessageId: finalMessageId };
+  } else {
+    const accessToken = decrypt(config.access_token);
+
+    // Self-heal legacy CBC ciphertexts. Fire-and-forget; idempotent.
+    if (isLegacyFormat(config.access_token)) {
+      void db
+        .from('whatsapp_config')
+        .update({ access_token: encrypt(accessToken) })
+        .eq('id', config.id)
+        .then(({ error }: { error: { message: string } | null }) => {
+          if (error) {
+            console.warn(
+              '[send-message] access_token GCM upgrade failed:',
+              error.message
+            );
+          }
+        });
+    }
+
+    // Resolve the reply target to its Meta message_id. The parent must
+    // belong to this same conversation — otherwise a caller could quote
+    // messages they can't see by guessing UUIDs.
+    let contextMessageId: string | undefined;
+    if (replyToMessageId) {
+      const { data: parent, error: parentError } = await db
+        .from('messages')
+        .select('message_id, conversation_id')
+        .eq('id', replyToMessageId)
+        .eq('conversation_id', conversationId)
+        .maybeSingle();
+
+      if (parentError || !parent) {
+        throw new SendMessageError(
+          'bad_request',
+          'reply_to_message_id not found in this conversation',
+          400
+        );
+      }
+      if (!parent.message_id) {
+        console.warn(
+          '[send-message] reply target has no Meta message_id; sending without context'
+        );
+      } else {
+        contextMessageId = parent.message_id;
       }
     }
 
-    if (lastError) throw lastError;
-  } catch (err) {
-    const message =
-      err instanceof Error ? err.message : 'Unknown Meta API error';
-    console.error('[send-message] Meta send failed for all variants:', message);
-    throw new SendMessageError('meta_error', `Meta API error: ${message}`, 502);
-  }
-
-  if (workingPhone !== sanitizedPhone) {
-    console.log(
-      `[send-message] Auto-corrected contact phone: ${sanitizedPhone} → ${workingPhone}`
-    );
-    await db
-      .from('contacts')
-      .update({ phone: workingPhone })
-      .eq('id', contact.id);
-  }
-
-  // Persist the sent message. Field names MUST match the messages
-  // schema (see 001_initial_schema.sql).
-  const { data: messageRecord, error: msgError } = await db
-    .from('messages')
-    .insert({
-      conversation_id: conversationId,
-      sender_type: 'agent',
-      content_type: messageType,
-      content_text: contentText || null,
-      media_url: mediaUrl || null,
-      template_name: templateName || null,
-      message_id: waMessageId,
-      status: 'sent',
-      reply_to_message_id: replyToMessageId || null,
-    })
-    .select()
-    .single();
-
-  if (msgError) {
-    console.error('[send-message] error inserting sent message:', msgError);
-    throw new SendMessageError(
-      'db_error',
-      `Message sent to Meta but failed to save to DB: ${msgError.message}`,
-      500
-    );
-  }
-
-  await db
-    .from('conversations')
-    .update({
-      last_message_text: contentText || `[${messageType}]`,
-      last_message_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', conversationId);
-
-  // Pause any active Flow run for this contact — the agent stepping in
-  // is the strongest "yield, human is here" signal. Best-effort.
-  try {
-    const { error: pauseErr } = await supabaseAdmin()
-      .from('flow_runs')
-      .update({
-        status: 'paused_by_agent',
-        ended_at: new Date().toISOString(),
-        end_reason: 'agent_replied',
-      })
-      .eq('account_id', accountId)
-      .eq('contact_id', contact.id)
-      .eq('status', 'active');
-    if (pauseErr) {
-      console.error('[flows] pause-on-agent-send failed:', pauseErr.message);
+    // Template row (for header + button components). isMessageTemplate
+    // guards against a malformed local row crashing the send-builder.
+    let templateRow: MessageTemplate | null = null;
+    if (messageType === 'template' && templateName) {
+      const { data } = await db
+        .from('message_templates')
+        .select('*')
+        .eq('account_id', accountId)
+        .eq('name', templateName)
+        .eq('language', templateLanguage || 'en_US')
+        .maybeSingle();
+      if (data && !isMessageTemplate(data)) {
+        throw new SendMessageError(
+          'template_malformed',
+          'Template row is malformed locally — run "Sync from Meta" in Settings to repair it.',
+          500
+        );
+      }
+      templateRow = data ?? null;
     }
-  } catch (err) {
-    console.error(
-      '[flows] pause-on-agent-send threw:',
-      err instanceof Error ? err.message : err
-    );
-  }
 
-  return { messageId: messageRecord.id, whatsappMessageId: waMessageId };
+    const attempt = async (phone: string): Promise<string> => {
+      if (messageType === 'template') {
+        const result = await sendTemplateMessage({
+          phoneNumberId: config.phone_number_id,
+          accessToken,
+          to: phone,
+          templateName: templateName!,
+          language: templateLanguage || 'en_US',
+          template: templateRow ?? undefined,
+          messageParams: templateMessageParams ?? undefined,
+          params: templateParams || [],
+          contextMessageId,
+        });
+        return result.messageId;
+      }
+      if (isMediaKind) {
+        const result = await sendMediaMessage({
+          phoneNumberId: config.phone_number_id,
+          accessToken,
+          to: phone,
+          kind: messageType as MediaKind,
+          link: mediaUrl!,
+          caption: contentText || undefined,
+          filename: filename || undefined,
+          contextMessageId,
+        });
+        return result.messageId;
+      }
+      const result = await sendTextMessage({
+        phoneNumberId: config.phone_number_id,
+        accessToken,
+        to: phone,
+        text: contentText!,
+        contextMessageId,
+      });
+      return result.messageId;
+    };
+
+    // Send via Meta — retry across phone-number variants if Meta rejects
+    // with "recipient not in allowed list"; persist a working variant
+    // back to the contact so the next send goes straight through.
+    let waMessageId = '';
+    let workingPhone = sanitizedPhone;
+    try {
+      const variants = phoneVariants(sanitizedPhone);
+      let lastError: unknown = null;
+
+      for (const variant of variants) {
+        try {
+          waMessageId = await attempt(variant);
+          workingPhone = variant;
+          lastError = null;
+          break;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!isRecipientNotAllowedError(message)) {
+            throw err;
+          }
+          lastError = err;
+          console.warn(
+            `[send-message] variant "${variant}" rejected by Meta, trying next…`
+          );
+        }
+      }
+
+      if (lastError) throw lastError;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Unknown Meta API error';
+      console.error('[send-message] Meta send failed for all variants:', message);
+      throw new SendMessageError('meta_error', `Meta API error: ${message}`, 502);
+    }
+
+    if (workingPhone !== sanitizedPhone) {
+      console.log(
+        `[send-message] Auto-corrected contact phone: ${sanitizedPhone} → ${workingPhone}`
+      );
+      await db
+        .from('contacts')
+        .update({ phone: workingPhone })
+        .eq('id', contact.id);
+    }
+
+    // Persist the sent message. Field names MUST match the messages
+    // schema (see 001_initial_schema.sql).
+    const { data: messageRecord, error: msgError } = await db
+      .from('messages')
+      .insert({
+        conversation_id: conversationId,
+        sender_type: 'agent',
+        content_type: messageType,
+        content_text: contentText || null,
+        media_url: mediaUrl || null,
+        template_name: templateName || null,
+        message_id: waMessageId,
+        status: 'sent',
+        reply_to_message_id: replyToMessageId || null,
+      })
+      .select()
+      .single();
+
+    if (msgError || !messageRecord) {
+      console.error('[send-message] error inserting sent message:', msgError);
+      throw new SendMessageError(
+        'db_error',
+        `Message sent to Meta but failed to save to DB: ${msgError?.message || 'unknown error'}`,
+        500
+      );
+    }
+
+    await db
+      .from('conversations')
+      .update({
+        last_message_text: contentText || `[${messageType}]`,
+        last_message_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', conversationId);
+
+    // Pause any active Flow run for this contact — the agent stepping in
+    // is the strongest "yield, human is here" signal. Best-effort.
+    try {
+      const { error: pauseErr } = await supabaseAdmin()
+        .from('flow_runs')
+        .update({
+          status: 'paused_by_agent',
+          ended_at: new Date().toISOString(),
+          end_reason: 'agent_replied',
+        })
+        .eq('account_id', accountId)
+        .eq('contact_id', contact.id)
+        .eq('status', 'active');
+      if (pauseErr) {
+        console.error('[flows] pause-on-agent-send failed:', pauseErr.message);
+      }
+    } catch (err) {
+      console.error(
+        '[flows] pause-on-agent-send threw:',
+        err instanceof Error ? err.message : err
+      );
+    }
+
+    return { messageId: messageRecord.id, whatsappMessageId: waMessageId };
+  }
 }
