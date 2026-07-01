@@ -80,6 +80,15 @@ export async function buildPrompt(ctx: PromptContext): Promise<ChatMessage[]> {
     )
   }
 
+  // Customer memory & past interactions context
+  const memoryContext = await buildMemoryContext(ctx.contactId, ctx.conversationId)
+  if (memoryContext) {
+    systemParts.push(
+      '\n--- CUSTOMER MEMORY & NOTES ---\n' +
+      memoryContext,
+    )
+  }
+
   // Knowledge base context (RAG chunks)
   if (ctx.knowledgeContext) {
     systemParts.push(
@@ -252,4 +261,61 @@ async function buildConversationHistory(
  */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN)
+}
+
+/**
+ * Build a text summary of the customer's history and human notes.
+ */
+async function buildMemoryContext(
+  contactId: string,
+  currentConversationId: string,
+): Promise<string | null> {
+  const db = supabaseAdmin()
+
+  // 1. Fetch other conversations for this contact
+  const { data: conversations } = await db
+    .from('conversations')
+    .select('id, channel, created_at, last_message_at, status')
+    .eq('contact_id', contactId)
+    .neq('id', currentConversationId)
+
+  // 2. Fetch all notes left by human agents
+  const { data: notes } = await db
+    .from('contact_notes')
+    .select('note_text, created_at')
+    .eq('contact_id', contactId)
+    .order('created_at', { ascending: false })
+
+  const hasConversations = conversations && conversations.length > 0
+  const hasNotes = notes && notes.length > 0
+
+  if (!hasConversations && !hasNotes) {
+    return 'This is a new customer. This is their first time messaging the business.'
+  }
+
+  const parts: string[] = []
+
+  if (hasConversations) {
+    parts.push('This is a RETURNING customer. They have existing conversations with the business:')
+    const channels = Array.from(new Set(conversations.map((c) => c.channel).filter(Boolean)))
+    parts.push(`- Previous Channels Used: ${channels.join(', ')}`)
+
+    parts.push('- Previous Threads:')
+    for (const c of conversations) {
+      const lastMsgAt = c.last_message_at ? new Date(c.last_message_at).toLocaleDateString() : 'N/A'
+      parts.push(`  * [Channel: ${c.channel}] Status: ${c.status}, Last active: ${lastMsgAt}`)
+    }
+  } else {
+    parts.push('This is a new customer, but they have profile details in the CRM.')
+  }
+
+  if (hasNotes) {
+    parts.push('\nHere are notes recorded by human agents about this customer:')
+    for (const n of notes) {
+      const noteDate = new Date(n.created_at).toLocaleDateString()
+      parts.push(`- [${noteDate}]: ${n.note_text}`)
+    }
+  }
+
+  return parts.join('\n')
 }

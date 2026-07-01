@@ -42,13 +42,38 @@ export async function GET(request: Request) {
       .select(
         'id, account_id, name, description, avatar_url, is_active, ' +
         'system_prompt, prompt_personality, prompt_goal, prompt_general_info, model_name, temperature, max_tokens, channels, ' +
-        'takeover_mode, takeover_timeout_minutes, provider, ' +
+        'takeover_mode, takeover_timeout_minutes, approval_mode, provider, ' +
         'booking_link, created_at, updated_at',
       )
       .eq('account_id', accountId)
       .order('created_at', { ascending: true })
 
     if (error) {
+      // Retry without approval_mode if the column does not exist yet in DB
+      if (error.message.includes('approval_mode') || error.code === '42703') {
+        const retryResult = await supabaseAdmin()
+          .from('ai_agents')
+          .select(
+            'id, account_id, name, description, avatar_url, is_active, ' +
+            'system_prompt, prompt_personality, prompt_goal, prompt_general_info, model_name, temperature, max_tokens, channels, ' +
+            'takeover_mode, takeover_timeout_minutes, provider, ' +
+            'booking_link, created_at, updated_at',
+          )
+          .eq('account_id', accountId)
+          .order('created_at', { ascending: true })
+
+        if (retryResult.error) {
+          console.error('[api/ai/agents] list retry error:', retryResult.error)
+          return NextResponse.json({ error: retryResult.error.message }, { status: 500 })
+        }
+
+        const mappedAgents = (retryResult.data ?? []).map((a: any) => ({
+          ...a,
+          approval_mode: false,
+        }))
+        return NextResponse.json({ agents: mappedAgents })
+      }
+
       console.error('[api/ai/agents] list error:', error)
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
@@ -83,6 +108,7 @@ export async function POST(request: Request) {
       channels,
       takeover_mode,
       takeover_timeout_minutes,
+      approval_mode,
       prompt_personality,
       prompt_goal,
       prompt_general_info,
@@ -115,6 +141,7 @@ export async function POST(request: Request) {
       channels: channels ?? ['whatsapp'],
       takeover_mode: takeover_mode ?? 'timeout',
       takeover_timeout_minutes: takeover_timeout_minutes ?? 120,
+      approval_mode: approval_mode ?? false,
       is_active: false, // New agents start inactive — user toggles on
     }
 
@@ -125,7 +152,7 @@ export async function POST(request: Request) {
         'id, account_id, name, description, is_active, system_prompt, ' +
         'prompt_personality, prompt_goal, prompt_general_info, ' +
         'model_name, temperature, max_tokens, channels, takeover_mode, ' +
-        'takeover_timeout_minutes, created_at',
+        'takeover_timeout_minutes, approval_mode, created_at',
       )
       .single()
 

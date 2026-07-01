@@ -110,6 +110,16 @@ export async function POST(request: Request) {
       return fail('bad_request', "'phone' is required", 400);
     }
 
+    // ============ VALIDATION SECTION ============
+    if ('tags' in body) {
+      if (
+        !Array.isArray(body.tags) ||
+        body.tags.some((t) => typeof t !== 'string')
+      ) {
+        return fail('bad_request', "'tags' must be an array of strings", 400);
+      }
+    }
+
     const auditUserId = await resolveAuditUserId(ctx.supabase, ctx.accountId);
 
     const { id, created } = await findOrCreateContact(
@@ -124,13 +134,14 @@ export async function POST(request: Request) {
       }
     );
 
-    if (Array.isArray(body.tags)) {
+    // ============ TAG HANDLING SECTION ============
+    if (body.tags) {
       await setContactTags(
         ctx.supabase,
         ctx.accountId,
         auditUserId,
         id,
-        body.tags.filter((t): t is string => typeof t === 'string')
+        body.tags as string[]
       );
     }
 

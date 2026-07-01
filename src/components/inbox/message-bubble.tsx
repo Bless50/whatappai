@@ -13,10 +13,19 @@ import {
   LayoutTemplate,
   ImageOff,
   CornerDownLeft,
+  ThumbsUp,
+  ThumbsDown,
+  Trash2,
+  Edit2,
+  Loader2,
+  Send,
+  X
 } from "lucide-react";
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
+import { createClient } from "@/lib/supabase/client";
+import { toast } from "sonner";
 
 interface MessageBubbleProps {
   message: Message;
@@ -214,11 +223,6 @@ function MessageContent({ message }: { message: Message }) {
       );
 
     case "interactive": {
-      // Customer tapped a reply button or list row on a message the bot
-      // sent. We show the tapped option's title (already in content_text,
-      // set by parseMessageContent in the webhook) with a small affordance
-      // so agents reading the inbox can tell at a glance that this is a
-      // tap rather than the customer typing the same words.
       return (
         <div className="flex flex-col gap-0.5">
           <span className="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -249,33 +253,180 @@ export function MessageBubble({
   onToggleReaction,
 }: MessageBubbleProps) {
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
+  const isPendingApproval = message.status === "pending_approval";
+  const isBot = message.sender_type === "bot";
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState(message.content_text || "");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Feedback states
+  const [showFeedbackForm, setShowFeedbackForm] = useState(false);
+  const [correctionText, setCorrectionText] = useState("");
+  const [feedbackNote, setFeedbackNote] = useState("");
+  const [currentRating, setCurrentRating] = useState<'good' | 'bad' | null>(
+    message.ai_feedback_rating || null
+  );
+
   const time = format(new Date(message.created_at), "HH:mm");
 
-  // Row alignment + width cap are owned by <MessageActions> so its hover
-  // group matches the bubble's content area, not the full row.
+  const handleApprove = async (textToApprove?: string) => {
+    setIsSubmitting(true);
+    try {
+      const res = await fetch(`/api/messages/${message.id}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ editedText: textToApprove }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to approve message");
+      }
+      toast.success("AI response approved and sent!");
+      setIsEditing(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to approve");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!confirm("Are you sure you want to reject and delete this AI draft?")) return;
+    setIsSubmitting(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase
+        .from("messages")
+        .delete()
+        .eq("id", message.id);
+      if (error) throw error;
+      toast.success("AI draft discarded");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to discard draft");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRating = async (rating: "good" | "bad") => {
+    if (rating === "good") {
+      try {
+        const res = await fetch(`/api/messages/${message.id}/feedback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rating }),
+        });
+        if (!res.ok) throw new Error("Failed to save feedback");
+        setCurrentRating("good");
+        toast.success("Feedback saved! Thank you.");
+      } catch (err) {
+        toast.error("Failed to save rating");
+      }
+    } else {
+      setShowFeedbackForm(true);
+      setCorrectionText(message.content_text || "");
+    }
+  };
+
+  const submitBadFeedback = async () => {
+    if (!correctionText.trim()) {
+      toast.error("Please enter what the AI should have said.");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const res = await fetch(`/api/messages/${message.id}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rating: "bad",
+          feedbackText: feedbackNote || "Human corrected response",
+          correctedResponse: correctionText,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save feedback");
+      setCurrentRating("bad");
+      setShowFeedbackForm(false);
+      toast.success("Correction saved and trained into AI memory!");
+    } catch (err) {
+      toast.error("Failed to save feedback");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div
       className={cn(
-        "flex flex-col",
-        isAgent ? "items-end" : "items-start",
+        "flex flex-col gap-1 w-full max-w-lg",
+        isAgent ? "items-end ml-auto" : "items-start",
       )}
     >
       <div
         className={cn(
-          "relative rounded-2xl px-3 py-2",
-          isAgent
-            ? "rounded-br-md bg-primary text-primary-foreground"
-            : "rounded-bl-md bg-muted text-foreground",
+          "relative rounded-2xl px-3 py-2 transition-all duration-200 shadow-sm",
+          isPendingApproval
+            ? "rounded-br-md border border-amber-300 bg-amber-50/95 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100 dark:border-amber-900"
+            : isAgent
+              ? "rounded-br-md bg-primary text-primary-foreground"
+              : "rounded-bl-md bg-muted text-foreground",
         )}
       >
         {reply && (
           <ReplyQuote
             authorLabel={reply.authorLabel}
             preview={reply.preview}
-            onPrimary={isAgent}
+            onPrimary={isAgent && !isPendingApproval}
           />
         )}
-        <MessageContent message={message} />
+        
+        {isEditing ? (
+          <div className="flex flex-col gap-2 min-w-[240px]">
+            <span className="text-[10px] font-semibold tracking-wide uppercase text-amber-600 dark:text-amber-400 font-sans">
+              Edit AI Response
+            </span>
+            <textarea
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              className="w-full rounded-md border border-amber-400 bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-amber-500"
+              rows={4}
+            />
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsEditing(false)}
+                disabled={isSubmitting}
+                className="rounded px-2.5 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/5 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApprove(editValue)}
+                disabled={isSubmitting}
+                className="flex items-center gap-1 rounded bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1 text-xs font-medium shadow-sm transition disabled:opacity-60 cursor-pointer"
+              >
+                {isSubmitting ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Send className="h-3 w-3" />
+                )}
+                Save & Send
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {isPendingApproval && (
+              <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400 font-sans">
+                AI Draft — Review Required
+              </span>
+            )}
+            <MessageContent message={message} />
+          </>
+        )}
+
         <div
           className={cn(
             "mt-1 flex items-center gap-1",
@@ -285,18 +436,159 @@ export function MessageBubble({
           <span
             className={cn(
               "text-[10px]",
-              // Outbound bubbles sit on the primary fill, so the
-              // timestamp must read against that (not the neutral
-              // foreground) — otherwise it goes low-contrast in light
-              // mode. Inbound bubbles use the muted surface.
-              isAgent ? "text-primary-foreground/70" : "text-muted-foreground",
+              isPendingApproval 
+                ? "text-amber-800/70 dark:text-amber-300/70"
+                : isAgent ? "text-primary-foreground/70" : "text-muted-foreground",
             )}
           >
             {time}
           </span>
-          {isAgent && <StatusIcon status={message.status} />}
+          {isAgent && !isPendingApproval && <StatusIcon status={message.status} />}
         </div>
       </div>
+
+      {/* Draft Approval Actions */}
+      {isPendingApproval && !isEditing && (
+        <div className="flex items-center gap-2 mt-1 px-1">
+          <button
+            type="button"
+            onClick={() => handleApprove()}
+            disabled={isSubmitting}
+            className="flex items-center gap-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-2.5 py-1 shadow-sm transition disabled:opacity-60 cursor-pointer"
+          >
+            {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            Approve
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsEditing(true)}
+            disabled={isSubmitting}
+            className="flex items-center gap-1 rounded-md bg-muted text-foreground hover:bg-accent border border-border text-xs font-semibold px-2.5 py-1 shadow-sm transition disabled:opacity-60 cursor-pointer"
+          >
+            <Edit2 className="h-3.5 w-3.5 text-muted-foreground" />
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={handleReject}
+            disabled={isSubmitting}
+            className="flex items-center gap-1 rounded-md bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200 text-xs font-semibold px-2.5 py-1 shadow-sm transition disabled:opacity-60 cursor-pointer dark:bg-rose-950/20 dark:text-rose-400 dark:border-rose-900"
+          >
+            {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            Reject
+          </button>
+        </div>
+      )}
+
+      {/* Bot Message Feedback & Corrective RAG Training */}
+      {isBot && !isPendingApproval && (
+        <div className="flex flex-col gap-1.5 mt-1 px-1 w-full items-end">
+          <div className="flex items-center gap-2.5 text-[11px] text-muted-foreground">
+            <span>AI Response quality:</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleRating("good")}
+                disabled={isSubmitting}
+                className={cn(
+                  "p-1 rounded-md hover:bg-muted transition cursor-pointer",
+                  currentRating === "good" ? "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30" : "text-muted-foreground"
+                )}
+                title="Accurate response"
+              >
+                <ThumbsUp className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRating("bad")}
+                disabled={isSubmitting}
+                className={cn(
+                  "p-1 rounded-md hover:bg-muted transition cursor-pointer",
+                  currentRating === "bad" ? "text-rose-600 bg-rose-50 dark:bg-rose-950/30" : "text-muted-foreground"
+                )}
+                title="Inaccurate response - correct it"
+              >
+                <ThumbsDown className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Inline correction form */}
+          {showFeedbackForm && (
+            <div className="w-full rounded-lg border bg-card p-3 mt-1 shadow-sm text-left">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs font-bold text-rose-600 dark:text-rose-400">Correct AI response</span>
+                <button
+                  type="button"
+                  onClick={() => setShowFeedbackForm(false)}
+                  className="p-0.5 rounded-full hover:bg-muted text-muted-foreground cursor-pointer"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <p className="text-[11px] text-muted-foreground mb-2">
+                Your correction will be automatically added to the agent's knowledge base so it answers correctly next time.
+              </p>
+              
+              <div className="space-y-2">
+                <div>
+                  <label className="text-[10px] font-medium text-muted-foreground uppercase block mb-1">
+                    What should the AI have said instead?
+                  </label>
+                  <textarea
+                    value={correctionText}
+                    onChange={(e) => setCorrectionText(e.target.value)}
+                    className="w-full text-xs rounded border bg-background p-2 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    rows={3}
+                    placeholder="E.g. We are closed on Sundays, but open Mon-Sat 9am-6pm."
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium text-muted-foreground uppercase block mb-1">
+                    Correction Note (Optional context)
+                  </label>
+                  <input
+                    type="text"
+                    value={feedbackNote}
+                    onChange={(e) => setFeedbackNote(e.target.value)}
+                    className="w-full text-xs rounded border bg-background px-2 py-1 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    placeholder="E.g. Sunday schedule correction"
+                  />
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowFeedbackForm(false)}
+                    className="text-xs px-2.5 py-1 hover:bg-muted rounded transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitBadFeedback}
+                    disabled={isSubmitting}
+                    className="flex items-center gap-1 text-xs bg-rose-600 hover:bg-rose-700 text-white font-semibold px-2.5 py-1 rounded shadow-sm transition cursor-pointer"
+                  >
+                    {isSubmitting && <Loader2 className="h-3 w-3 animate-spin" />}
+                    Save Correction
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Display active correction summary if rated bad previously */}
+          {currentRating === "bad" && message.ai_corrected_text && (
+            <div className="w-full text-right text-[10px] text-rose-500 bg-rose-500/5 px-2 py-1 rounded mt-0.5">
+              <span>Corrected to: </span>
+              <span className="font-semibold italic text-muted-foreground">
+                "{message.ai_corrected_text}"
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       {reactions && reactions.length > 0 && onToggleReaction && (
         <MessageReactions
           reactions={reactions}

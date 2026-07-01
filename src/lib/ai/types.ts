@@ -39,6 +39,7 @@ export interface AIAgent {
   channels: AIAgentChannel[];
   takeover_mode: AITakeoverMode;
   takeover_timeout_minutes: number;
+  approval_mode: boolean;
   /** Legacy booking link from migration 023. */
   booking_link: string | null;
   created_at: string;

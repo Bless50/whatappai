@@ -197,7 +197,7 @@ export type ContentType =
   | 'template'
   /** Customer tapped a reply button or list row on a message we sent. */
   | 'interactive';
-export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'pending_approval';
 
 export interface Message {
   id: string;
@@ -219,6 +219,11 @@ export interface Message {
    * cue (renders with a "↩ button reply" affordance).
    */
   interactive_reply_id?: string;
+  ai_feedback_rating?: 'good' | 'bad' | null;
+  ai_feedback_text?: string | null;
+  ai_corrected_text?: string | null;
+  metadata?: Record<string, unknown> | null;
+  channel?: string;
 }
 
 export type ReactionActor = 'customer' | 'agent';

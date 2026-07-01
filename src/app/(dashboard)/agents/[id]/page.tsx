@@ -48,6 +48,7 @@ interface AgentDetail {
   channels: string[];
   takeover_mode: string;
   takeover_timeout_minutes: number;
+  approval_mode: boolean;
   has_api_key: boolean;
   created_at: string;
   updated_at: string;
@@ -334,6 +335,7 @@ export default function AgentConfigPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [isActive, setIsActive] = useState(false);
+  const [approvalMode, setApprovalMode] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState("");
   const [promptPersonality, setPromptPersonality] = useState("");
   const [promptGoal, setPromptGoal] = useState("");
@@ -371,6 +373,7 @@ export default function AgentConfigPage() {
       setChannels(a.channels ?? ["whatsapp"]);
       setTakeoverMode(a.takeover_mode ?? "timeout");
       setTakeoverTimeout(a.takeover_timeout_minutes ?? 120);
+      setApprovalMode(a.approval_mode ?? false);
       
       // Extract KB IDs
       const kbLinks = a.ai_agent_knowledge_bases ?? [];
@@ -423,6 +426,7 @@ export default function AgentConfigPage() {
         channels,
         takeover_mode: takeoverMode,
         takeover_timeout_minutes: takeoverTimeout,
+        approval_mode: approvalMode,
         knowledge_base_ids: kbIds,
         skills: skills,
       };
@@ -580,6 +584,17 @@ export default function AgentConfigPage() {
                   </p>
                 </div>
                 <Switch checked={isActive} onCheckedChange={setIsActive} />
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border p-4">
+                <div>
+                  <p className="font-medium">Human Approval Mode</p>
+                  <p className="text-sm text-muted-foreground">
+                    When enabled, the AI drafts a response but doesn't send it.
+                    A human must review and approve it from the Inbox.
+                  </p>
+                </div>
+                <Switch checked={approvalMode} onCheckedChange={setApprovalMode} />
               </div>
 
               <div>

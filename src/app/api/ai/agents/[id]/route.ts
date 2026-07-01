@@ -55,7 +55,7 @@ export async function GET(
     // Strip the encrypted API key from the response — frontend
     // should never see it. Send a boolean flag instead.
     const hasApiKey = !!(agent.openrouter_key || agent.openrouter_api_key)
-    const safeAgent = { ...agent }
+    const safeAgent = { approval_mode: false, ...agent }
     delete safeAgent.openrouter_key
     delete safeAgent.openrouter_api_key
 
@@ -86,7 +86,7 @@ export async function PATCH(
       'name', 'description', 'avatar_url', 'is_active', 'system_prompt',
       'prompt_personality', 'prompt_goal', 'prompt_general_info',
       'model_name', 'temperature', 'max_tokens', 'channels',
-      'takeover_mode', 'takeover_timeout_minutes',
+      'takeover_mode', 'takeover_timeout_minutes', 'approval_mode',
     ]
 
     const updates: Record<string, unknown> = {}
@@ -108,7 +108,7 @@ export async function PATCH(
       )
     }
 
-    const { data: agent, error } = await supabaseAdmin()
+    let updateResult = await supabaseAdmin()
       .from('ai_agents')
       .update(updates)
       .eq('id', id)
@@ -116,9 +116,36 @@ export async function PATCH(
         'id, account_id, name, description, is_active, system_prompt, ' +
         'prompt_personality, prompt_goal, prompt_general_info, ' +
         'model_name, temperature, max_tokens, channels, takeover_mode, ' +
-        'takeover_timeout_minutes, updated_at',
+        'takeover_timeout_minutes, approval_mode, updated_at',
       )
       .single()
+
+    if (updateResult.error) {
+      const errMsg = updateResult.error.message
+      const errCode = updateResult.error.code
+      if (errMsg.includes('approval_mode') || errCode === '42703') {
+        const retryUpdates = { ...updates }
+        delete retryUpdates.approval_mode
+
+        updateResult = await supabaseAdmin()
+          .from('ai_agents')
+          .update(retryUpdates)
+          .eq('id', id)
+          .select(
+            'id, account_id, name, description, is_active, system_prompt, ' +
+            'prompt_personality, prompt_goal, prompt_general_info, ' +
+            'model_name, temperature, max_tokens, channels, takeover_mode, ' +
+            'takeover_timeout_minutes, updated_at',
+          )
+          .single()
+
+        if (updateResult.data) {
+          updateResult.data.approval_mode = false
+        }
+      }
+    }
+
+    const { data: agent, error } = updateResult
 
     // Handle Knowledge Base assignments
     if ('knowledge_base_ids' in body && Array.isArray(body.knowledge_base_ids)) {

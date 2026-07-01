@@ -202,39 +202,119 @@ export async function executeAgent(
       return null
     }
 
-    // ============ 6. SEND REPLY VIA WHATSAPP ============
+    // ============ 6. SEND REPLY (WITH APPROVAL & CHANNEL ROUTING) ============
     const replyText = response.content
 
-    // Find the WhatsApp config for this account to get the phone_number_id
-    const { data: waConfig } = await db
-      .from('whatsapp_config')
-      .select('phone_number_id, access_token')
-      .eq('account_id', input.accountId)
-      .maybeSingle()
+    if (agent.approval_mode) {
+      // Create a pending approval message instead of sending it
+      const messageId = `draft-${crypto.randomUUID()}`
+      await db.from('messages').insert({
+        conversation_id: input.conversationId,
+        sender_type: 'bot',
+        content_type: 'text',
+        content_text: replyText,
+        message_id: messageId,
+        status: 'pending_approval',
+        channel: input.channel ?? 'whatsapp',
+      })
 
-    if (waConfig) {
-      const contactPhone = await getContactPhone(input.contactId)
-      const sanitizedPhone = contactPhone.replace(/\D/g, '')
+      // Update conversation's last message text to show as draft
+      await db
+        .from('conversations')
+        .update({
+          last_message_text: `[Draft] ${replyText.substring(0, 60)}...`,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', input.conversationId)
+
+      // Still log usage so we track latency/tokens for the draft generation
+      const latencyMs = Date.now() - startMs
+      await db.from('ai_conversation_logs').insert({
+        agent_id: agent.id,
+        conversation_id: input.conversationId,
+        model_used: response.model,
+        prompt_tokens: totalPromptTokens,
+        completion_tokens: totalCompletionTokens,
+        total_cost_usd: totalCost,
+        latency_ms: latencyMs,
+      })
+
+      return replyText
+    }
+
+    if (input.channel === 'facebook' || input.channel === 'instagram') {
+      const { data: connAcc } = await db
+        .from('connected_accounts')
+        .select('access_token')
+        .eq('account_id', input.accountId)
+        .eq('provider', input.channel)
+        .maybeSingle()
+
+      if (!connAcc || !connAcc.access_token) {
+        console.error(`[ai/engine] No access token found for channel ${input.channel}`)
+        return null
+      }
+
+      // Decrypt Meta Page Access Token safely
+      let token = connAcc.access_token
+      try {
+        token = decrypt(connAcc.access_token)
+      } catch {
+        // Plain text
+      }
+
+      const { data: lastCustMsg } = await db
+        .from('messages')
+        .select('message_id, metadata')
+        .eq('conversation_id', input.conversationId)
+        .eq('sender_type', 'customer')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      const isComment = lastCustMsg?.metadata ? (lastCustMsg.metadata as { is_comment?: boolean }).is_comment === true : false
+      const parentId = lastCustMsg?.message_id
 
       let messageId = ''
-
-      if (waConfig.phone_number_id === 'linked-phone') {
-        const gatewayUrl = process.env.WHATSAPP_GATEWAY_URL
-        if (!gatewayUrl) {
-          console.error('[ai/engine] WHATSAPP_GATEWAY_URL environment variable is not defined')
+      if (isComment && parentId) {
+        // Reply to the post comment
+        const url = `https://graph.facebook.com/v19.0/${parentId}/comments?access_token=${token}`
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: replyText })
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          console.error('[ai/engine] Meta Comment send failed:', err)
           return null
         }
+        const resData = await res.json()
+        messageId = resData.id || ''
+      } else {
+        // Send DM (Messenger or Instagram DM)
+        const contactPhone = await getContactPhone(input.contactId)
+        const recipientId = contactPhone // Scoped ID is saved in contact's phone
+        
+        const url = `https://graph.facebook.com/v19.0/me/messages?access_token=${token}`
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipient: { id: recipientId },
+            message: { text: replyText }
+          })
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          console.error('[ai/engine] Meta Message send failed:', err)
+          return null
+        }
+        const resData = await res.json()
+        messageId = resData.message_id || ''
+      }
 
-        const sendUrl = gatewayUrl.endsWith('/api/messages/send')
-          ? gatewayUrl
-          : `${gatewayUrl.replace(/\/$/, '')}/api/messages/send`
-
-        // Generate a messageId FIRST so we can insert it into the database immediately.
-        // This completely eliminates the race condition where the WhatsApp echo
-        // arrives at the webhook before the HTTP request returns.
-        messageId = `3EB0${crypto.randomUUID().replace(/-/g, '').substring(0, 18).toUpperCase()}`
-
-        // Insert the AI's reply into the DB BEFORE sending it!
+      if (messageId) {
         await db.from('messages').insert({
           conversation_id: input.conversationId,
           sender_type: 'bot',
@@ -242,74 +322,13 @@ export async function executeAgent(
           content_text: replyText,
           message_id: messageId,
           status: 'sent',
-          channel: 'whatsapp',
+          channel: input.channel,
+          metadata: {
+            is_comment: isComment,
+            parent_id: isComment ? parentId : undefined
+          }
         })
 
-        let gatewayRes: Response
-        try {
-          gatewayRes = await fetch(sendUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              accountId: input.accountId,
-              to: sanitizedPhone,
-              text: replyText,
-            }),
-          })
-        } catch (fetchErr: unknown) {
-          // fetch itself threw — gateway process is down (ECONNREFUSED),
-          // network unreachable, DNS failure, etc.
-          console.error('[ai/engine] Gateway send failed (fetch error):', fetchErr instanceof Error ? fetchErr.message : fetchErr)
-          await db.from('messages').update({ status: 'failed' }).eq('message_id', messageId)
-          return null
-        }
-
-        if (!gatewayRes.ok) {
-          const errData = await gatewayRes.json().catch(() => ({ error: 'Unknown gateway error' }))
-          console.error('[ai/engine] Gateway send failed:', errData.error)
-          
-          // Update the message to failed
-          await db.from('messages').update({ status: 'failed' }).eq('message_id', messageId)
-          return null
-        }
-
-        // ============ UPDATE REAL MESSAGE ID FROM GATEWAY ============
-        const resData = await gatewayRes.json().catch(() => null)
-        if (resData?.success && resData.messageId && resData.messageId !== messageId) {
-          console.log(`[ai/engine] Updating message_id from generated ${messageId} to real ${resData.messageId}`)
-          await db
-            .from('messages')
-            .update({ message_id: resData.messageId })
-            .eq('message_id', messageId)
-          messageId = resData.messageId
-        }
-      } else {
-        const waAccessToken = decrypt(waConfig.access_token)
-
-        // Send the message via Meta API
-        const sendResult = await sendTextMessage({
-          phoneNumberId: waConfig.phone_number_id,
-          accessToken: waAccessToken,
-          to: sanitizedPhone,
-          text: replyText,
-        })
-        messageId = sendResult?.messageId ?? ''
-
-        // Insert the bot's message into the messages table (only for Meta API, since linked-phone inserts before sending)
-        if (messageId) {
-          await db.from('messages').insert({
-            conversation_id: input.conversationId,
-            sender_type: 'bot',
-            content_type: 'text',
-            content_text: replyText,
-            message_id: messageId,
-            status: 'sent',
-          })
-        }
-      }
-
-      // Update conversation's last message
-      if (messageId) {
         await db
           .from('conversations')
           .update({
@@ -318,6 +337,110 @@ export async function executeAgent(
             updated_at: new Date().toISOString(),
           })
           .eq('id', input.conversationId)
+      }
+    } else {
+      // Find the WhatsApp config for this account to get the phone_number_id
+      const { data: waConfig } = await db
+        .from('whatsapp_config')
+        .select('phone_number_id, access_token')
+        .eq('account_id', input.accountId)
+        .maybeSingle()
+
+      if (waConfig) {
+        const contactPhone = await getContactPhone(input.contactId)
+        const sanitizedPhone = contactPhone.replace(/\D/g, '')
+
+        let messageId = ''
+
+        if (waConfig.phone_number_id === 'linked-phone') {
+          const gatewayUrl = process.env.WHATSAPP_GATEWAY_URL
+          if (!gatewayUrl) {
+            console.error('[ai/engine] WHATSAPP_GATEWAY_URL environment variable is not defined')
+            return null
+          }
+
+          const sendUrl = gatewayUrl.endsWith('/api/messages/send')
+            ? gatewayUrl
+            : `${gatewayUrl.replace(/\/$/, '')}/api/messages/send`
+
+          messageId = `3EB0${crypto.randomUUID().replace(/-/g, '').substring(0, 18).toUpperCase()}`
+
+          await db.from('messages').insert({
+            conversation_id: input.conversationId,
+            sender_type: 'bot',
+            content_type: 'text',
+            content_text: replyText,
+            message_id: messageId,
+            status: 'sent',
+            channel: 'whatsapp',
+          })
+
+          let gatewayRes: Response
+          try {
+            gatewayRes = await fetch(sendUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                accountId: input.accountId,
+                to: sanitizedPhone,
+                text: replyText,
+              }),
+            })
+          } catch (fetchErr: unknown) {
+            console.error('[ai/engine] Gateway send failed (fetch error):', fetchErr instanceof Error ? fetchErr.message : fetchErr)
+            await db.from('messages').update({ status: 'failed' }).eq('message_id', messageId)
+            return null
+          }
+
+          if (!gatewayRes.ok) {
+            const errData = await gatewayRes.json().catch(() => ({ error: 'Unknown gateway error' }))
+            console.error('[ai/engine] Gateway send failed:', errData.error)
+            await db.from('messages').update({ status: 'failed' }).eq('message_id', messageId)
+            return null
+          }
+
+          const resData = await gatewayRes.json().catch(() => null)
+          if (resData?.success && resData.messageId && resData.messageId !== messageId) {
+            console.log(`[ai/engine] Updating message_id from generated ${messageId} to real ${resData.messageId}`)
+            await db
+              .from('messages')
+              .update({ message_id: resData.messageId })
+              .eq('message_id', messageId)
+            messageId = resData.messageId
+          }
+        } else {
+          const waAccessToken = decrypt(waConfig.access_token)
+
+          const sendResult = await sendTextMessage({
+            phoneNumberId: waConfig.phone_number_id,
+            accessToken: waAccessToken,
+            to: sanitizedPhone,
+            text: replyText,
+          })
+          messageId = sendResult?.messageId ?? ''
+
+          if (messageId) {
+            await db.from('messages').insert({
+              conversation_id: input.conversationId,
+              sender_type: 'bot',
+              content_type: 'text',
+              content_text: replyText,
+              message_id: messageId,
+              status: 'sent',
+            })
+          }
+        }
+
+        if (messageId) {
+          await db
+            .from('conversations')
+            .update({
+              last_message_text: replyText,
+              last_message_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', input.conversationId)
+        }
       }
     }
 
