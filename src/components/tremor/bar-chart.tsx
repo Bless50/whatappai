@@ -184,6 +184,7 @@ const ScrollButton = ({ icon, onClick, disabled }: ScrollButtonProps) => {
   React.useEffect(() => {
     if (disabled) {
       clearInterval(intervalRef.current as NodeJS.Timeout)
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsPressed(false)
     }
   }, [disabled])
@@ -661,7 +662,7 @@ const BarChart = React.forwardRef<HTMLDivElement, BarChartProps>(
         tremor-id="tremor-raw"
         {...other}
       >
-        <ResponsiveContainer>
+        <ResponsiveContainer minHeight={1} minWidth={1}>
           <RechartsBarChart
             data={data}
             onClick={

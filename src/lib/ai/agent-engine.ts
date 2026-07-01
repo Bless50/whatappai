@@ -245,15 +245,24 @@ export async function executeAgent(
           channel: 'whatsapp',
         })
 
-        const gatewayRes = await fetch(sendUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            accountId: input.accountId,
-            to: sanitizedPhone,
-            text: replyText,
-          }),
-        })
+        let gatewayRes: Response
+        try {
+          gatewayRes = await fetch(sendUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              accountId: input.accountId,
+              to: sanitizedPhone,
+              text: replyText,
+            }),
+          })
+        } catch (fetchErr: unknown) {
+          // fetch itself threw — gateway process is down (ECONNREFUSED),
+          // network unreachable, DNS failure, etc.
+          console.error('[ai/engine] Gateway send failed (fetch error):', fetchErr instanceof Error ? fetchErr.message : fetchErr)
+          await db.from('messages').update({ status: 'failed' }).eq('message_id', messageId)
+          return null
+        }
 
         if (!gatewayRes.ok) {
           const errData = await gatewayRes.json().catch(() => ({ error: 'Unknown gateway error' }))

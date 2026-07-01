@@ -43,6 +43,8 @@ interface BaileysMessageKey {
   fromMe: boolean
   id: string | null
   participant?: string | null
+  // senderPn is populated by Baileys for @lid JIDs — it contains the real phone number
+  senderPn?: string | null
 }
 
 interface BaileysMessageContent {
@@ -144,6 +146,9 @@ function extractTextFromBaileysMessage(
 function jidToPhone(jid: string | null): string | null {
   if (!jid) return null
   if (jid.endsWith('@g.us') || jid.endsWith('@broadcast')) return null
+  // @lid JIDs are WhatsApp-internal Linked Identity IDs — NOT phone numbers.
+  // Returning null here forces the caller to use senderPn instead.
+  if (jid.endsWith('@lid')) return null
   const [userPart] = jid.split('@')
   const [phone] = userPart.split(':')
   return phone || null
@@ -257,10 +262,10 @@ async function handleConnectionStatus(
 
   if (!configOwnerUserId) {
     const { data: memberRow } = await supabaseAdmin()
-      .from('account_members')
+      .from('profiles')
       .select('user_id')
       .eq('account_id', accountId)
-      .eq('role', 'admin')
+      .in('account_role', ['owner', 'admin'])
       .limit(1)
       .maybeSingle()
     configOwnerUserId = memberRow?.user_id || null
@@ -334,13 +339,39 @@ async function handleConnectionStatus(
 
 async function handleInboundMessage(
   accountId: string,
-  rawMsg: BaileysMessage
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  rawMsg: BaileysMessage & { resolvedPhoneJid?: string | null }
 ) {
   const key = rawMsg.key
 
   // Extract sender JID
   const senderJid = key.remoteJid
-  const rawPhone = jidToPhone(senderJid)
+  const isLidJid = senderJid?.endsWith('@lid') ?? false
+
+  // For @lid JIDs, jidToPhone returns null — we must resolve the real phone
+  // from senderPn (populated by Baileys) or the gateway-resolved resolvedPhoneJid.
+  let rawPhone = jidToPhone(senderJid)
+
+  if (!rawPhone && isLidJid) {
+    // Try senderPn first (Baileys populates this for @lid JIDs when available)
+    const senderPn = key.senderPn
+    const resolvedJid = rawMsg.resolvedPhoneJid
+    const phoneSource = senderPn || resolvedJid
+    if (phoneSource) {
+      // Strip @s.whatsapp.net suffix if present
+      rawPhone = phoneSource.replace(/@.*$/, '')
+      console.log(`[web-session/webhook] LID ${senderJid} resolved via ${senderPn ? 'senderPn' : 'resolvedPhoneJid'}: ${rawPhone}`)
+    } else {
+      // ============ LID FALLBACK ============
+      // We couldn't resolve the real phone number yet.
+      // Use the LID number itself as the phone so the message still appears in
+      // the CRM. The gateway's USync/signalRepository may resolve it on the
+      // next message, and the self-heal step will correct the contact's phone.
+      rawPhone = senderJid!.split('@')[0]
+      console.warn(`[web-session/webhook] LID ${senderJid} unresolved — using LID number as fallback phone: ${rawPhone}`)
+    }
+  }
+
   if (!rawPhone) {
     console.log('[web-session/webhook] Skipping non-user JID:', senderJid)
     return
@@ -421,6 +452,36 @@ async function handleInboundMessage(
   if (!configOwnerUserId) {
     console.error(`[web-session/webhook] No owner user found for account ${accountId}. Dropping message.`)
     return
+  }
+
+  // ============ SELF-HEAL: FIX LID-DERIVED CONTACT PHONES ============
+  // Before finding/creating the contact, check if there is an existing contact
+  // whose phone was previously stored as the raw LID number (e.g., "267327555809488").
+  // This happens when an earlier version of the webhook processed a @lid message
+  // before this fix was applied. We update the bad phone to the real one so we
+  // don't end up with duplicate contacts.
+  if (isLidJid && senderJid) {
+    const lidNumber = senderJid.split('@')[0]
+    // Only attempt heal when the LID number differs from the resolved real phone
+    const normalizedLid = normalizePhone(lidNumber)
+    if (normalizedLid !== senderPhone) {
+      const { data: brokenContact } = await supabaseAdmin()
+        .from('contacts')
+        .select('id, phone')
+        .eq('account_id', accountId)
+        .eq('phone', normalizedLid)
+        .maybeSingle()
+
+      if (brokenContact) {
+        console.log(
+          `[web-session/webhook] Self-healing contact ${brokenContact.id}: updating phone from LID "${normalizedLid}" → "${senderPhone}"`
+        )
+        await supabaseAdmin()
+          .from('contacts')
+          .update({ phone: senderPhone, updated_at: new Date().toISOString() })
+          .eq('id', brokenContact.id)
+      }
+    }
   }
 
   // ============ FIND / CREATE CONTACT ============
@@ -675,7 +736,9 @@ export async function POST(request: Request) {
         body.qr as string | undefined
       )
     } else if (eventType === 'messages.upsert') {
-      await handleInboundMessage(accountId, body.message as BaileysMessage)
+      const rawMessage = body.message as BaileysMessage
+      const resolvedPhoneJid = body.resolvedPhoneJid as string | null | undefined
+      await handleInboundMessage(accountId, { ...rawMessage, resolvedPhoneJid: resolvedPhoneJid ?? null })
     } else {
       console.log(`[web-session/webhook] Unhandled event type: ${eventType}`)
     }
