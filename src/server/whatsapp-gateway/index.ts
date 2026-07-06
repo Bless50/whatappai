@@ -591,6 +591,46 @@ app.post('/api/session/disconnect', async (req, res) => {
   res.json({ success: true, status: 'disconnected' });
 });
 
+app.post('/api/messages/presence', async (req, res) => {
+  const { accountId, to, presence } = req.body;
+  if (!accountId || !to || !presence) {
+    res.status(400).json({ error: 'accountId, to, and presence are required in body' });
+    return;
+  }
+  const session = sessions.get(accountId);
+  if (!session || session.status !== 'connected' || !session.client) {
+    res.status(400).json({ error: 'WhatsApp Web session is not connected for this account' });
+    return;
+  }
+  if (presence !== 'composing' && presence !== 'recording' && presence !== 'paused') {
+    res.status(400).json({ error: 'presence must be composing, recording, or paused' });
+    return;
+  }
+  try {
+    const cleanNumber = to.replace(/\D/g, '').replace(/@.*$/, '');
+    let targetJid: string;
+    const resolvedPhoneJid = lidToPhoneJid.get(cleanNumber);
+
+    if (to.includes('@')) {
+      targetJid = to.replace('@c.us', '@s.whatsapp.net');
+    } else if (resolvedPhoneJid) {
+      targetJid = resolvedPhoneJid.includes('@') ? resolvedPhoneJid : `${resolvedPhoneJid}@s.whatsapp.net`;
+    } else if (knownLidNumbers.has(cleanNumber)) {
+      targetJid = `${cleanNumber}@lid`;
+    } else {
+      targetJid = `${cleanNumber}@s.whatsapp.net`;
+    }
+
+    await session.client.sendPresenceUpdate(presence, targetJid);
+    console.log(`[Gateway] Presence updated to "${presence}" for JID: ${targetJid}`);
+    res.json({ success: true });
+  } catch (err) {
+    const error = err as Error;
+    console.error(`[Gateway] Error updating presence for account ${accountId}:`, error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/messages/send', async (req, res) => {
   const { accountId, to, text, messageId } = req.body;
   if (!accountId || !to || !text) {

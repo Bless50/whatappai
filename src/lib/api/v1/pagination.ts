@@ -76,12 +76,14 @@ export function decodeCursor(value: string | null): Cursor | null {
     if (sep === -1) return null;
     const createdAt = decoded.slice(0, sep);
     const id = decoded.slice(sep + 1);
+    const ISO_TS_RE =
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
     // Reject anything that isn't a plausible server-issued cursor: an
     // ISO-8601 timestamp and a UUID. This is what keeps the raw
     // interpolation in `keysetFilter` safe.
     if (!UUID_RE.test(id)) return null;
-    const ts = Date.parse(createdAt);
-    if (Number.isNaN(ts)) return null;
+    if (!ISO_TS_RE.test(createdAt)) return null;
     return { createdAt, id };
   } catch {
     return null;

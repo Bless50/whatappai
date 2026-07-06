@@ -19,6 +19,7 @@ import { tagContactSkill } from './tag-contact'
 import { updateContactSkill } from './update-contact'
 import { bookAppointmentSkill } from './book-appointment'
 import { escalateSkill } from './escalate'
+import { notifyOwnerSkill } from './notify-owner'
 
 // ============================================================
 // Skill Registry
@@ -31,6 +32,7 @@ const SKILL_REGISTRY: Map<AISkillType, SkillDefinition> = new Map([
   ['update_contact', updateContactSkill],
   ['book_appointment', bookAppointmentSkill],
   ['escalate', escalateSkill],
+  ['notify_owner', notifyOwnerSkill],
 ])
 
 /**

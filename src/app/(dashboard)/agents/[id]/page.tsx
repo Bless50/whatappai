@@ -54,7 +54,7 @@ interface AgentDetail {
   updated_at: string;
   account_id?: string;
   ai_agent_knowledge_bases?: { knowledge_base_id: string }[];
-  ai_agent_skills?: { skill_type: string; is_enabled: boolean }[];
+  ai_agent_skills?: { skill_type: string; is_enabled: boolean; skill_config?: Record<string, unknown> }[];
 }
 
 interface OpenRouterModel {
@@ -91,6 +91,7 @@ const AVAILABLE_SKILLS = [
   { id: "tag_contact", name: "Tag Contact", desc: "Allow the AI to apply tags to contacts based on the conversation." },
   { id: "update_contact", name: "Update Contact", desc: "Allow the AI to collect and update contact details (like email or company)." },
   { id: "escalate", name: "Escalate", desc: "Allow the AI to pause itself and notify the business owner when human help is needed." },
+  { id: "notify_owner", name: "Notify Owner", desc: "Allow the AI to send collected customer information (name, phone, email, interest) to your WhatsApp number." },
 ];
 
 // ============================================================
@@ -349,6 +350,7 @@ export default function AgentConfigPage() {
   const [takeoverTimeout, setTakeoverTimeout] = useState(120);
   const [kbIds, setKbIds] = useState<string[]>([]);
   const [skills, setSkills] = useState<string[]>([]);
+  const [skillConfigs, setSkillConfigs] = useState<Record<string, Record<string, unknown>>>({});
   const [availableKbs, setAvailableKbs] = useState<{id: string, name: string}[]>([]);
 
   // ============ FETCH AGENT ============
@@ -384,6 +386,15 @@ export default function AgentConfigPage() {
         .filter((s) => s.is_enabled)
         .map((s) => s.skill_type);
       setSkills(enabledSkills);
+
+      // Extract Skill Configs
+      const configs: Record<string, Record<string, unknown>> = {};
+      for (const s of a.ai_agent_skills ?? []) {
+        if (s.skill_config && Object.keys(s.skill_config).length > 0) {
+          configs[s.skill_type] = s.skill_config;
+        }
+      }
+      setSkillConfigs(configs);
       
       // Fetch available KBs for this account
       if (a.account_id) {
@@ -429,6 +440,7 @@ export default function AgentConfigPage() {
         approval_mode: approvalMode,
         knowledge_base_ids: kbIds,
         skills: skills,
+        skill_configs: skillConfigs,
       };
 
       // Only send API key if user entered a new one
@@ -590,7 +602,7 @@ export default function AgentConfigPage() {
                 <div>
                   <p className="font-medium">Human Approval Mode</p>
                   <p className="text-sm text-muted-foreground">
-                    When enabled, the AI drafts a response but doesn't send it.
+                    When enabled, the AI drafts a response but doesn&apos;t send it.
                     A human must review and approve it from the Inbox.
                   </p>
                 </div>
@@ -904,16 +916,44 @@ export default function AgentConfigPage() {
               {AVAILABLE_SKILLS.map((skill) => (
                 <div
                   key={skill.id}
-                  className="flex items-start justify-between rounded-lg border p-4 shadow-sm"
+                  className="rounded-lg border p-4 shadow-sm space-y-3"
                 >
-                  <div className="mr-6">
-                    <p className="font-medium">{skill.name}</p>
-                    <p className="text-sm text-muted-foreground">{skill.desc}</p>
+                  <div className="flex items-start justify-between">
+                    <div className="mr-6">
+                      <p className="font-medium">{skill.name}</p>
+                      <p className="text-sm text-muted-foreground">{skill.desc}</p>
+                    </div>
+                    <Switch
+                      checked={skills.includes(skill.id)}
+                      onCheckedChange={() => toggleSkill(skill.id)}
+                    />
                   </div>
-                  <Switch
-                    checked={skills.includes(skill.id)}
-                    onCheckedChange={() => toggleSkill(skill.id)}
-                  />
+                  {/* Notify Owner — phone number config */}
+                  {skill.id === "notify_owner" && skills.includes("notify_owner") && (
+                    <div className="pt-2 border-t">
+                      <label className="block text-xs font-medium text-muted-foreground mb-1">
+                        Your WhatsApp Number (receives notifications)
+                      </label>
+                      <Input
+                        type="tel"
+                        placeholder="+234 xxx xxxx xxxx"
+                        value={(skillConfigs.notify_owner?.notify_phone as string) ?? ""}
+                        onChange={(e) =>
+                          setSkillConfigs((prev) => ({
+                            ...prev,
+                            notify_owner: {
+                              ...prev.notify_owner,
+                              notify_phone: e.target.value,
+                            },
+                          }))
+                        }
+                        className="max-w-xs"
+                      />
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        The AI will send collected customer info to this number via WhatsApp.
+                      </p>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -942,7 +982,7 @@ export default function AgentConfigPage() {
         {/* PLAYGROUND TAB */}
         {activeTab === "playground" && (
           <div className="pt-2">
-            <BotPlayground agentId={agentId} />
+            <BotPlayground agentId={agentId} accountId={agent?.account_id} />
           </div>
         )}
       </div>

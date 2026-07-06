@@ -218,6 +218,9 @@ export async function getContactById(
     .eq('id', contactId)
     .eq('account_id', accountId)
     .maybeSingle();
-  if (error || !data) return null;
+  if (error) {
+    throw new ContactError('Failed to load contact', 500);
+  }
+  if (!data) return null;
   return serializeContact(data as Record<string, unknown>);
 }

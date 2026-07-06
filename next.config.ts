@@ -65,7 +65,6 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  // @ts-expect-error - Next.js types may not include these in some versions
   typescript: {
     ignoreBuildErrors: true,
   },

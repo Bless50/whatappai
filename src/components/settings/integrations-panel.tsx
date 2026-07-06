@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
-import { CalendarDays, Loader2, Plus, Trash2, Facebook, Instagram, Link2 } from "lucide-react";
+import { CalendarDays, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,6 +15,63 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+
+// Brand icons were removed in Lucide v1, so we define custom SVG wrappers for them.
+interface IconProps extends React.SVGProps<SVGSVGElement> {
+  size?: number | string;
+}
+
+const Facebook = ({ className, size = 24, ...props }: IconProps) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    {...props}
+  >
+    <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" />
+  </svg>
+);
+
+const Instagram = ({ className, size = 24, ...props }: IconProps) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    {...props}
+  >
+    <rect width="20" height="20" x="2" y="2" rx="5" ry="5" />
+    <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" />
+    <line x1="17.5" x2="17.51" y1="6.5" y2="6.5" />
+  </svg>
+);
+
+const TikTok = ({ className, size = 24, ...props }: IconProps) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    className={className}
+    {...props}
+  >
+    <path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.17-2.89-.74-3.94-1.78-.22-.22-.41-.47-.59-.73v7.02c0 3.82-3.13 7.02-7.01 7.02-3.69-.02-6.73-2.91-7-6.59-.44-3.91 2.62-7.46 6.55-7.46 1.12.01 2.19.3 3.11.85V0l.13.02z" />
+  </svg>
+);
 
 interface Integration {
   id: string;
@@ -41,13 +98,12 @@ export function IntegrationsPanel() {
   const [igAccountId, setIgAccountId] = useState("");
   const [igToken, setIgToken] = useState("");
 
-  useEffect(() => {
-    if (!accountId) return;
-    fetchIntegrations();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accountId]);
+  // TikTok dialog states
+  const [isTikTokOpen, setIsTikTokOpen] = useState(false);
+  const [tiktokAccountId, setTiktokAccountId] = useState("");
+  const [tiktokToken, setTiktokToken] = useState("");
 
-  const fetchIntegrations = async () => {
+  async function fetchIntegrations() {
     try {
       const res = await fetch(`/api/integrations?account_id=${accountId}`);
       const data = await res.json();
@@ -60,7 +116,13 @@ export function IntegrationsPanel() {
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    if (!accountId) return;
+    fetchIntegrations();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountId]);
 
   const handleConnectGoogle = () => {
     if (!accountId) return;
@@ -125,6 +187,37 @@ export function IntegrationsPanel() {
       fetchIntegrations();
     } catch (err) {
       toast.error("Failed to connect Instagram Business account");
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleConnectTikTok = async () => {
+    if (!tiktokAccountId.trim() || !tiktokToken.trim()) {
+      toast.error("Please enter both TikTok Business Account ID and Access Token");
+      return;
+    }
+    setConnecting(true);
+    try {
+      const res = await fetch('/api/integrations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account_id: accountId,
+          provider: 'tiktok',
+          provider_account_id: tiktokAccountId.trim(),
+          access_token: tiktokToken.trim(),
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to connect");
+      toast.success("TikTok Business connected successfully!");
+      setIsTikTokOpen(false);
+      setTiktokAccountId("");
+      setTiktokToken("");
+      fetchIntegrations();
+    } catch (err) {
+      toast.error("Failed to connect TikTok Business account");
     } finally {
       setConnecting(false);
     }
@@ -240,6 +333,24 @@ export function IntegrationsPanel() {
               Connect Instagram
             </Button>
           </div>
+
+          {/* TikTok */}
+          <div className="flex items-center justify-between border rounded-lg p-4 bg-muted/20">
+            <div className="flex items-center gap-4">
+              <div className="bg-black text-white p-2.5 rounded-md border shadow-sm flex items-center justify-center">
+                <TikTok className="w-7 h-7 fill-white" />
+              </div>
+              <div>
+                <p className="font-medium text-sm">TikTok Business</p>
+                <p className="text-xs text-muted-foreground">Reply to direct messages (DMs) and video comments</p>
+              </div>
+            </div>
+            
+            <Button onClick={() => setIsTikTokOpen(true)} variant="outline" className="shrink-0 gap-2 text-xs">
+              <Plus className="w-4 h-4" />
+              Connect TikTok
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -265,6 +376,8 @@ export function IntegrationsPanel() {
                       <CalendarDays className="w-4 h-4 text-muted-foreground" />
                     ) : integration.provider === "facebook" ? (
                       <Facebook className="w-4 h-4 text-blue-600 fill-blue-600" />
+                    ) : integration.provider === "tiktok" ? (
+                      <TikTok className="w-4 h-4 text-black fill-black dark:text-white dark:fill-white" />
                     ) : (
                       <Instagram className="w-4 h-4 text-pink-600" />
                     )}
@@ -373,6 +486,52 @@ export function IntegrationsPanel() {
               Cancel
             </Button>
             <Button className="text-xs" onClick={handleConnectInstagram} disabled={connecting}>
+              {connecting && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
+              Connect Account
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* TikTok Connect Dialog */}
+      <Dialog open={isTikTokOpen} onOpenChange={setIsTikTokOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <TikTok className="w-5 h-5 text-black fill-black dark:text-white dark:fill-white" /> Connect TikTok Business
+            </DialogTitle>
+            <DialogDescription>
+              Enter your TikTok Business Account ID and Developer Access Token. You can generate these from your TikTok for Developers dashboard.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="tiktokAccountId" className="text-xs">TikTok Account ID / Username</Label>
+              <Input
+                id="tiktokAccountId"
+                placeholder="E.g. @mybusiness"
+                value={tiktokAccountId}
+                onChange={(e) => setTiktokAccountId(e.target.value)}
+                className="text-xs"
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="tiktokToken" className="text-xs">Access Token</Label>
+              <Input
+                id="tiktokToken"
+                type="password"
+                placeholder="act.tks..."
+                value={tiktokToken}
+                onChange={(e) => setTiktokToken(e.target.value)}
+                className="text-xs"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="text-xs" onClick={() => setIsTikTokOpen(false)} disabled={connecting}>
+              Cancel
+            </Button>
+            <Button className="text-xs" onClick={handleConnectTikTok} disabled={connecting}>
               {connecting && <Loader2 className="w-3 h-3 animate-spin mr-1" />}
               Connect Account
             </Button>

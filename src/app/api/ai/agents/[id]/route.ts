@@ -166,11 +166,15 @@ export async function PATCH(
       const db = supabaseAdmin()
       await db.from('ai_agent_skills').delete().eq('agent_id', id)
       
+      // skill_configs is an optional map of { [skill_type]: { ...config } }
+      const skillConfigs: Record<string, Record<string, unknown>> =
+        (body.skill_configs as Record<string, Record<string, unknown>>) ?? {}
+
       if (body.skills.length > 0) {
         const skillInserts = body.skills.map((skillType: string) => ({
           agent_id: id,
           skill_type: skillType,
-          skill_config: {},
+          skill_config: skillConfigs[skillType] ?? {},
           is_enabled: true
         }))
         await db.from('ai_agent_skills').insert(skillInserts)

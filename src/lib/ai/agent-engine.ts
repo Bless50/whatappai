@@ -58,6 +58,7 @@ export async function executeAgent(
 ): Promise<string | null> {
   const startMs = Date.now()
   const db = supabaseAdmin()
+  let isLinkedPhone = false
 
   try {
     // ============ 1. DECRYPT API KEY ============
@@ -67,6 +68,20 @@ export async function executeAgent(
       return null
     }
     const decryptedKey = decrypt(apiKey)
+
+    // ============ TRIGGER TYPING STATUS ============
+    const isWhatsApp = !input.channel || input.channel === 'whatsapp'
+    if (isWhatsApp) {
+      const { data: waConfig } = await db
+        .from('whatsapp_config')
+        .select('phone_number_id')
+        .eq('account_id', input.accountId)
+        .maybeSingle()
+      if (waConfig?.phone_number_id === 'linked-phone') {
+        isLinkedPhone = true
+        void setGatewayPresence(input.accountId, input.contactId, 'composing')
+      }
+    }
 
     // ============ 2. LOAD AGENT SKILLS ============
     const { data: skillRows } = await db
@@ -199,6 +214,9 @@ export async function executeAgent(
 
     if (!response?.content) {
       console.warn(`[ai/engine] Agent ${agent.id} produced no response content`)
+      if (isLinkedPhone) {
+        void setGatewayPresence(input.accountId, input.contactId, 'paused')
+      }
       return null
     }
 
@@ -239,6 +257,9 @@ export async function executeAgent(
         latency_ms: latencyMs,
       })
 
+      if (isLinkedPhone) {
+        void setGatewayPresence(input.accountId, input.contactId, 'paused')
+      }
       return replyText
     }
 
@@ -465,6 +486,9 @@ export async function executeAgent(
     return replyText
   } catch (err) {
     console.error(`[ai/engine] Agent ${agent.id} execution failed:`, err)
+    if (isLinkedPhone) {
+      void setGatewayPresence(input.accountId, input.contactId, 'paused')
+    }
     return null
   }
 }
@@ -537,4 +561,37 @@ async function getContactPhone(contactId: string): Promise<string> {
     .single()
 
   return data?.phone ?? ''
+}
+
+/**
+ * Set the presence state (e.g. typing / composing) on the WhatsApp gateway.
+ */
+async function setGatewayPresence(
+  accountId: string,
+  contactId: string,
+  presence: 'composing' | 'paused'
+): Promise<void> {
+  try {
+    const gatewayUrl = process.env.WHATSAPP_GATEWAY_URL
+    if (!gatewayUrl) return
+
+    const presenceUrl = gatewayUrl.endsWith('/api/messages/presence')
+      ? gatewayUrl
+      : `${gatewayUrl.replace(/\/$/, '')}/api/messages/presence`
+
+    const contactPhone = await getContactPhone(contactId)
+    const sanitizedPhone = contactPhone.replace(/\D/g, '')
+
+    await fetch(presenceUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountId,
+        to: sanitizedPhone,
+        presence,
+      }),
+    })
+  } catch (err) {
+    console.error('[ai/engine] Failed to update gateway presence:', err)
+  }
 }

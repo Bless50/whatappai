@@ -50,6 +50,9 @@ export function PresenceHeartbeat() {
 
     const beat = async () => {
       if (cancelled) return;
+      // Skip if browser is offline to prevent useless "Failed to fetch" errors.
+      if (typeof navigator !== "undefined" && !navigator.onLine) return;
+
       // Coalesce bursts: a tab refocus fires visibilitychange AND focus
       // together, so skip a beat within 1s of the last to avoid two RPCs
       // in the same frame. The 30s interval is never affected.
@@ -58,9 +61,16 @@ export function PresenceHeartbeat() {
       lastBeatAt = t;
 
       try {
-        const { error } = await supabase.rpc("touch_presence", {
-          p_status: currentStatus(),
+        const { error } = await Promise.resolve(
+          supabase.rpc("touch_presence", {
+            p_status: currentStatus(),
+          })
+        ).catch((err: unknown) => {
+          return {
+            error: err instanceof Error ? err : new Error(String(err)),
+          };
         });
+
         if (error && !cancelled) {
           // Non-fatal: presence is best-effort. Log as warning so a
           // misconfigured RPC is visible in console without triggering Next.js error overlays.

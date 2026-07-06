@@ -263,6 +263,14 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN)
 }
 
+interface MemoryConversation {
+  id: string
+  channel: string | null
+  created_at: string
+  last_message_at: string | null
+  status: string
+}
+
 /**
  * Build a text summary of the customer's history and human notes.
  */
@@ -273,11 +281,13 @@ async function buildMemoryContext(
   const db = supabaseAdmin()
 
   // 1. Fetch other conversations for this contact
-  const { data: conversations } = await db
+  const { data } = await db
     .from('conversations')
     .select('id, channel, created_at, last_message_at, status')
     .eq('contact_id', contactId)
     .neq('id', currentConversationId)
+
+  const conversations = data as MemoryConversation[] | null
 
   // 2. Fetch all notes left by human agents
   const { data: notes } = await db

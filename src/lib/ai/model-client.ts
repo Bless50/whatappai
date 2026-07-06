@@ -102,6 +102,32 @@ export async function callModel(
         continue
       }
 
+      if (response.status === 402) {
+        const errorBody = await response.text()
+        try {
+          const errObj = JSON.parse(errorBody)
+          const errMsg = errObj?.error?.message || ''
+          const match = errMsg.match(/can only afford (\d+)/)
+          if (match && match[1]) {
+            const affordableTokens = parseInt(match[1], 10)
+            const currentMax = typeof body.max_tokens === 'number' ? body.max_tokens : 1024
+            const nextMaxTokens = Math.max(50, Math.floor(affordableTokens * 0.95))
+            if (nextMaxTokens < currentMax) {
+              console.warn(
+                `[ai/model-client] OpenRouter returned 402. Retrying with reduced max_tokens: ${nextMaxTokens} (was ${currentMax})`
+              )
+              body.max_tokens = nextMaxTokens
+              continue
+            }
+          }
+        } catch {
+          // Ignore parsing error, throw original 402
+        }
+        throw new Error(
+          `[ai/model-client] OpenRouter returned 402 (Payment Required): ${errorBody}`,
+        )
+      }
+
       if (!response.ok) {
         const errorBody = await response.text()
         throw new Error(

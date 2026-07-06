@@ -168,6 +168,10 @@ export const NODE_META: Record<
   },
 };
 
+/** Every node type, in NODE_META's declaration order. Single source
+ *  of truth for menus that need "all types" (Add-node dropdowns). */
+export const ALL_NODE_TYPES = Object.keys(NODE_META) as NodeType[];
+
 /**
  * Bucket an ordered list of node types by category, preserving both
  * the category order (NODE_CATEGORIES) and the within-category order
@@ -183,7 +187,6 @@ export function groupNodeTypesByCategory(
     types: types.filter((t) => NODE_META[t].category === id),
   })).filter((group) => group.types.length > 0);
 }
-
 // ============================================================
 // Per-node-type color system.
 //

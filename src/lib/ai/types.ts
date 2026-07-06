@@ -13,7 +13,7 @@
 // DB Row Types (match migration 024)
 // ============================================================
 
-export type AIAgentChannel = 'whatsapp' | 'facebook' | 'instagram';
+export type AIAgentChannel = 'whatsapp' | 'facebook' | 'instagram' | 'tiktok';
 export type AITakeoverMode = 'timeout' | 'manual' | 'on_close';
 export type AIConversationStatus = 'active' | 'paused' | 'disabled';
 
@@ -52,7 +52,8 @@ export type AISkillType =
   | 'tag_contact'
   | 'book_appointment'
   | 'escalate'
-  | 'update_contact';
+  | 'update_contact'
+  | 'notify_owner';
 
 export interface AIAgentSkill {
   id: string;
