@@ -864,13 +864,19 @@ export default function AgentConfigPage() {
                   id: "facebook",
                   label: "Facebook Messenger",
                   desc: "Respond to Facebook messages and comments",
-                  available: false,
+                  available: true,
                 },
                 {
                   id: "instagram",
                   label: "Instagram DMs",
                   desc: "Respond to Instagram direct messages",
-                  available: false,
+                  available: true,
+                },
+                {
+                  id: "tiktok",
+                  label: "TikTok",
+                  desc: "Respond to TikTok comments and direct messages",
+                  available: true,
                 },
               ].map((ch) => (
                 <div
