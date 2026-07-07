@@ -284,15 +284,17 @@ async function handleIncomingContent({
 
   const conversationId = conversation.id
 
+  const prefixedMsgId = isComment ? `comment:${messageId}` : `dm:${messageId}`
+
   // Check if message already exists (handled by CRM or AI)
   const { data: existingMsg } = await db
     .from('messages')
     .select('id')
-    .eq('message_id', messageId)
+    .eq('message_id', prefixedMsgId)
     .maybeSingle()
 
   if (existingMsg) {
-    console.log(`[facebook/webhook] Duplicate message ${messageId} skipped (handled by CRM/AI)`)
+    console.log(`[facebook/webhook] Duplicate message ${prefixedMsgId} skipped (handled by CRM/AI)`)
     return
   }
 
@@ -304,7 +306,7 @@ async function handleIncomingContent({
       sender_type: isEcho ? 'agent' : 'customer',
       content_type: 'text',
       content_text: text,
-      message_id: messageId,
+      message_id: prefixedMsgId,
       status: 'sent',
       channel,
     })

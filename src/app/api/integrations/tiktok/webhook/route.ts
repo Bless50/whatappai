@@ -182,15 +182,11 @@ async function processEvent(payload: TikTokWebhookPayload) {
       userId,
       senderId: c.user_open_id,
       senderName: c.user_display_name || 'TikTok User',
-      messageId: c.comment_id,
+      messageId: `${c.video_id}:${c.comment_id}`,
       text: c.text,
       isComment: true,
       isEcho: false,
-      metadata: {
-        is_comment: true,
-        video_id: c.video_id,
-        business_id: businessId,
-      },
+      metadata: {},
     })
   } else if (event === 'message.create' || event === 'message') {
     const m = content as TikTokMessageEvent
@@ -317,16 +313,18 @@ async function handleIncoming({
 
   const conversationId = conversation.id
 
+  const prefixedMsgId = isComment ? `comment:${messageId}` : `dm:${messageId}`
+
   // ============ 3. DEDUPLICATE ============
   const { data: existingMsg } = await db
     .from('messages')
     .select('id')
-    .eq('message_id', messageId)
+    .eq('message_id', prefixedMsgId)
     .maybeSingle()
 
   if (existingMsg) {
     console.log(
-      `[tiktok/webhook] Duplicate message ${messageId} skipped`,
+      `[tiktok/webhook] Duplicate message ${prefixedMsgId} skipped`,
     )
     return
   }
@@ -337,10 +335,9 @@ async function handleIncoming({
     sender_type: isEcho ? 'agent' : 'customer',
     content_type: 'text',
     content_text: text,
-    message_id: messageId,
+    message_id: prefixedMsgId,
     status: 'sent',
     channel: 'tiktok',
-    metadata,
   })
 
   if (msgError) {

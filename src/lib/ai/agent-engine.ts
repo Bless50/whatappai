@@ -287,15 +287,19 @@ export async function executeAgent(
 
       const { data: lastCustMsg } = await db
         .from('messages')
-        .select('message_id, metadata')
+        .select('message_id')
         .eq('conversation_id', input.conversationId)
         .eq('sender_type', 'customer')
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle()
 
-      const isComment = lastCustMsg?.metadata ? (lastCustMsg.metadata as { is_comment?: boolean }).is_comment === true : false
-      const parentId = lastCustMsg?.message_id
+      const isComment = lastCustMsg?.message_id.startsWith('comment:') || false
+      const parentId = isComment && lastCustMsg
+        ? lastCustMsg.message_id.slice('comment:'.length)
+        : lastCustMsg?.message_id.startsWith('dm:') && lastCustMsg
+          ? lastCustMsg.message_id.slice('dm:'.length)
+          : lastCustMsg?.message_id
 
       let messageId = ''
       if (isComment && parentId) {
@@ -339,18 +343,16 @@ export async function executeAgent(
       }
 
       if (messageId) {
+        const prefixedBotMsgId = isComment ? `comment:${messageId}` : `dm:${messageId}`
+
         await db.from('messages').insert({
           conversation_id: input.conversationId,
           sender_type: 'bot',
           content_type: 'text',
           content_text: replyText,
-          message_id: messageId,
+          message_id: prefixedBotMsgId,
           status: 'sent',
           channel: input.channel,
-          metadata: {
-            is_comment: isComment,
-            parent_id: isComment ? parentId : undefined
-          }
         })
 
         await db
@@ -389,17 +391,25 @@ export async function executeAgent(
       // Determine whether the last customer message was a comment or DM
       const { data: lastCustMsg } = await db
         .from('messages')
-        .select('message_id, metadata')
+        .select('message_id')
         .eq('conversation_id', input.conversationId)
         .eq('sender_type', 'customer')
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle()
 
-      const msgMeta = lastCustMsg?.metadata as { is_comment?: boolean; video_id?: string } | null
-      const isComment = msgMeta?.is_comment === true
-      const videoId = msgMeta?.video_id || ''
-      const parentCommentId = lastCustMsg?.message_id || ''
+      const isComment = lastCustMsg?.message_id.startsWith('comment:') || false
+      let videoId = ''
+      let parentCommentId = ''
+      if (isComment && lastCustMsg) {
+        const parts = lastCustMsg.message_id.split(':')
+        videoId = parts[1] || ''
+        parentCommentId = parts[2] || ''
+      } else if (lastCustMsg) {
+        parentCommentId = lastCustMsg.message_id.startsWith('dm:')
+          ? lastCustMsg.message_id.slice('dm:'.length)
+          : lastCustMsg.message_id
+      }
 
       let messageId = ''
 
@@ -439,30 +449,31 @@ export async function executeAgent(
       }
 
       // Insert bot message into database
-      await db.from('messages').insert({
-        conversation_id: input.conversationId,
-        sender_type: 'bot',
-        content_type: 'text',
-        content_text: replyText,
-        message_id: messageId,
-        status: 'sent',
-        channel: 'tiktok',
-        metadata: {
-          is_comment: isComment,
-          video_id: isComment ? videoId : undefined,
-          parent_id: isComment ? parentCommentId : undefined,
-        },
-      })
+      if (messageId) {
+        const prefixedBotMsgId = isComment 
+          ? `comment:${videoId}:${messageId}` 
+          : `dm:${messageId}`
 
-      // Update conversation timestamps
-      await db
-        .from('conversations')
-        .update({
-          last_message_text: replyText,
-          last_message_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+        await db.from('messages').insert({
+          conversation_id: input.conversationId,
+          sender_type: 'bot',
+          content_type: 'text',
+          content_text: replyText,
+          message_id: prefixedBotMsgId,
+          status: 'sent',
+          channel: 'tiktok',
         })
-        .eq('id', input.conversationId)
+
+        // Update conversation timestamps
+        await db
+          .from('conversations')
+          .update({
+            last_message_text: replyText,
+            last_message_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', input.conversationId)
+      }
     } else {
       // Find the WhatsApp config for this account to get the phone_number_id
       const { data: waConfig } = await db
