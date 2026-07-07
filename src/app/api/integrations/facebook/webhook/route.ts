@@ -301,13 +301,12 @@ async function handleIncomingContent({
     .from('messages')
     .insert({
       conversation_id: conversationId,
-      sender_type: isEcho ? 'agent' : 'customer', // 'agent' means human business owner
+      sender_type: isEcho ? 'agent' : 'customer',
       content_type: 'text',
       content_text: text,
       message_id: messageId,
       status: 'sent',
       channel,
-      metadata,
     })
 
   if (msgError) {
