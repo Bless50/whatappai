@@ -158,10 +158,10 @@ async function processEvent(payload: TikTokWebhookPayload) {
 
   // Resolve owner user_id for database FK constraints
   const { data: member } = await db
-    .from('account_members')
+    .from('profiles')
     .select('user_id')
     .eq('account_id', accountId)
-    .eq('role', 'owner')
+    .in('account_role', ['owner', 'admin'])
     .limit(1)
     .maybeSingle()
 
