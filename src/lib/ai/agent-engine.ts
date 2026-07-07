@@ -33,6 +33,7 @@ import { supabaseAdmin } from './admin-client'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { sendTextMessage } from '@/lib/whatsapp/meta-api'
 import { generateEmbeddings } from './embedding-client'
+import { replyToComment, sendDirectMessage } from '@/lib/tiktok/tiktok-api'
 
 // ============================================================
 // Constants
@@ -359,6 +360,107 @@ export async function executeAgent(
           })
           .eq('id', input.conversationId)
       }
+    } else if (input.channel === 'tiktok') {
+      // ============ TIKTOK CHANNEL ROUTING ============
+      const { data: connAcc } = await db
+        .from('connected_accounts')
+        .select('access_token, provider_account_id')
+        .eq('account_id', input.accountId)
+        .eq('provider', 'tiktok')
+        .maybeSingle()
+
+      if (!connAcc || !connAcc.access_token) {
+        console.error('[ai/engine] No access token found for TikTok channel')
+        return null
+      }
+
+      // Decrypt the stored access token safely
+      let token = connAcc.access_token
+      try {
+        token = decrypt(connAcc.access_token)
+      } catch {
+        // Plain text — use as-is
+      }
+
+      const businessId = connAcc.provider_account_id || ''
+
+      // Determine whether the last customer message was a comment or DM
+      const { data: lastCustMsg } = await db
+        .from('messages')
+        .select('message_id, metadata')
+        .eq('conversation_id', input.conversationId)
+        .eq('sender_type', 'customer')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      const msgMeta = lastCustMsg?.metadata as { is_comment?: boolean; video_id?: string } | null
+      const isComment = msgMeta?.is_comment === true
+      const videoId = msgMeta?.video_id || ''
+      const parentCommentId = lastCustMsg?.message_id || ''
+
+      let messageId = ''
+
+      if (isComment && parentCommentId && videoId) {
+        // Reply to a TikTok video comment
+        const result = await replyToComment({
+          accessToken: token,
+          businessId,
+          videoId,
+          commentId: parentCommentId,
+          text: replyText,
+        })
+        if (!result.success) {
+          console.error('[ai/engine] TikTok comment reply failed:', result.error)
+          return null
+        }
+        messageId = result.commentId || `tiktok-reply-${Date.now()}`
+      } else {
+        // Send a TikTok DM
+        const contactPhone = await getContactPhone(input.contactId)
+        // contactPhone format is "tiktok:<open_id>" — extract the open_id
+        const recipientOpenId = contactPhone.startsWith('tiktok:')
+          ? contactPhone.slice('tiktok:'.length)
+          : contactPhone
+
+        const result = await sendDirectMessage({
+          accessToken: token,
+          businessId,
+          recipientOpenId,
+          text: replyText,
+        })
+        if (!result.success) {
+          console.error('[ai/engine] TikTok DM send failed:', result.error)
+          return null
+        }
+        messageId = result.messageId || `tiktok-dm-${Date.now()}`
+      }
+
+      // Insert bot message into database
+      await db.from('messages').insert({
+        conversation_id: input.conversationId,
+        sender_type: 'bot',
+        content_type: 'text',
+        content_text: replyText,
+        message_id: messageId,
+        status: 'sent',
+        channel: 'tiktok',
+        metadata: {
+          is_comment: isComment,
+          video_id: isComment ? videoId : undefined,
+          parent_id: isComment ? parentCommentId : undefined,
+        },
+      })
+
+      // Update conversation timestamps
+      await db
+        .from('conversations')
+        .update({
+          last_message_text: replyText,
+          last_message_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', input.conversationId)
     } else {
       // Find the WhatsApp config for this account to get the phone_number_id
       const { data: waConfig } = await db
