@@ -316,7 +316,9 @@ export async function executeAgent(
       } else {
         // Send DM (Messenger or Instagram DM)
         const contactPhone = await getContactPhone(input.contactId)
-        const recipientId = contactPhone // Scoped ID is saved in contact's phone
+        const recipientId = contactPhone.includes(':')
+          ? contactPhone.split(':')[1]
+          : contactPhone
         
         const url = `https://graph.facebook.com/v19.0/me/messages?access_token=${token}`
         const res = await fetch(url, {
