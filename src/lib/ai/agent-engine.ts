@@ -80,8 +80,14 @@ export async function executeAgent(
         .maybeSingle()
       if (waConfig?.phone_number_id === 'linked-phone') {
         isLinkedPhone = true
-        void setGatewayPresence(input.accountId, input.contactId, 'composing')
       }
+    }
+
+    const delaySeconds = agent.response_delay_seconds ?? 0
+    // Trigger typing immediately ONLY if there is no response delay configured.
+    // If a delay is set, we wait silently first and trigger typing right before sending.
+    if (isLinkedPhone && delaySeconds === 0) {
+      void setGatewayPresence(input.accountId, input.contactId, 'composing')
     }
 
     // ============ 2. LOAD AGENT SKILLS ============
@@ -219,6 +225,25 @@ export async function executeAgent(
         void setGatewayPresence(input.accountId, input.contactId, 'paused')
       }
       return null
+    }
+
+    // ============ HUMAN-LIKE RESPONSE DELAY ============
+    if (delaySeconds > 0) {
+      const safeDelay = Math.min(delaySeconds, 45) // Cap at 45s for serverless stability
+      const typingTime = Math.min(3, safeDelay) // Typing indicator active for up to 3s
+      const silentDelay = safeDelay - typingTime
+
+      if (silentDelay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, silentDelay * 1000))
+      }
+
+      if (isLinkedPhone) {
+        void setGatewayPresence(input.accountId, input.contactId, 'composing')
+      }
+
+      if (typingTime > 0) {
+        await new Promise((resolve) => setTimeout(resolve, typingTime * 1000))
+      }
     }
 
     // ============ 6. SEND REPLY (WITH APPROVAL & CHANNEL ROUTING) ============

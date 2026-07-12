@@ -42,15 +42,19 @@ export async function GET(request: Request) {
       .select(
         'id, account_id, name, description, avatar_url, is_active, ' +
         'system_prompt, prompt_personality, prompt_goal, prompt_general_info, model_name, temperature, max_tokens, channels, ' +
-        'takeover_mode, takeover_timeout_minutes, approval_mode, provider, ' +
+        'takeover_mode, takeover_timeout_minutes, approval_mode, response_delay_seconds, provider, ' +
         'booking_link, created_at, updated_at',
       )
       .eq('account_id', accountId)
       .order('created_at', { ascending: true })
 
     if (error) {
-      // Retry without approval_mode if the column does not exist yet in DB
-      if (error.message.includes('approval_mode') || error.code === '42703') {
+      // Retry without approval_mode and response_delay_seconds if the columns do not exist yet in DB
+      if (
+        error.message.includes('approval_mode') || 
+        error.message.includes('response_delay_seconds') || 
+        error.code === '42703'
+      ) {
         const retryResult = await supabaseAdmin()
           .from('ai_agents')
           .select(
@@ -67,9 +71,10 @@ export async function GET(request: Request) {
           return NextResponse.json({ error: retryResult.error.message }, { status: 500 })
         }
 
-        const mappedAgents = (retryResult.data ?? []).map((a: any) => ({
-          ...a,
+        const mappedAgents = (retryResult.data ?? []).map((a: Record<string, unknown>) => ({
           approval_mode: false,
+          response_delay_seconds: 0,
+          ...a,
         }))
         return NextResponse.json({ agents: mappedAgents })
       }
@@ -109,6 +114,7 @@ export async function POST(request: Request) {
       takeover_mode,
       takeover_timeout_minutes,
       approval_mode,
+      response_delay_seconds,
       prompt_personality,
       prompt_goal,
       prompt_general_info,
@@ -142,6 +148,7 @@ export async function POST(request: Request) {
       takeover_mode: takeover_mode ?? 'timeout',
       takeover_timeout_minutes: takeover_timeout_minutes ?? 120,
       approval_mode: approval_mode ?? false,
+      response_delay_seconds: response_delay_seconds ?? 0,
       is_active: false, // New agents start inactive — user toggles on
     }
 
@@ -152,7 +159,7 @@ export async function POST(request: Request) {
         'id, account_id, name, description, is_active, system_prompt, ' +
         'prompt_personality, prompt_goal, prompt_general_info, ' +
         'model_name, temperature, max_tokens, channels, takeover_mode, ' +
-        'takeover_timeout_minutes, approval_mode, created_at',
+        'takeover_timeout_minutes, approval_mode, response_delay_seconds, created_at',
       )
       .single()
 

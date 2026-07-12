@@ -49,6 +49,7 @@ interface AgentDetail {
   takeover_mode: string;
   takeover_timeout_minutes: number;
   approval_mode: boolean;
+  response_delay_seconds?: number;
   has_api_key: boolean;
   created_at: string;
   updated_at: string;
@@ -348,6 +349,7 @@ export default function AgentConfigPage() {
   const [channels, setChannels] = useState<string[]>(["whatsapp"]);
   const [takeoverMode, setTakeoverMode] = useState("timeout");
   const [takeoverTimeout, setTakeoverTimeout] = useState(120);
+  const [responseDelaySeconds, setResponseDelaySeconds] = useState(0);
   const [kbIds, setKbIds] = useState<string[]>([]);
   const [skills, setSkills] = useState<string[]>([]);
   const [skillConfigs, setSkillConfigs] = useState<Record<string, Record<string, unknown>>>({});
@@ -375,6 +377,7 @@ export default function AgentConfigPage() {
       setChannels(a.channels ?? ["whatsapp"]);
       setTakeoverMode(a.takeover_mode ?? "timeout");
       setTakeoverTimeout(a.takeover_timeout_minutes ?? 120);
+      setResponseDelaySeconds(a.response_delay_seconds ?? 0);
       setApprovalMode(a.approval_mode ?? false);
       
       // Extract KB IDs
@@ -437,6 +440,7 @@ export default function AgentConfigPage() {
         channels,
         takeover_mode: takeoverMode,
         takeover_timeout_minutes: takeoverTimeout,
+        response_delay_seconds: responseDelaySeconds,
         approval_mode: approvalMode,
         knowledge_base_ids: kbIds,
         skills: skills,
@@ -644,6 +648,23 @@ export default function AgentConfigPage() {
                   />
                 </div>
               )}
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">
+                  Response Delay (seconds)
+                </label>
+                <Input
+                  type="number"
+                  value={responseDelaySeconds}
+                  onChange={(e) => setResponseDelaySeconds(Number(e.target.value))}
+                  min={0}
+                  max={45}
+                  placeholder="0 (respond immediately)"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Delay before sending the AI response (max 45 seconds to prevent network timeouts). During the last few seconds of this delay, the bot will show as &quot;typing...&quot; on WhatsApp.
+                </p>
+              </div>
             </div>
           </div>
         )}

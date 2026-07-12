@@ -40,6 +40,7 @@ export interface AIAgent {
   takeover_mode: AITakeoverMode;
   takeover_timeout_minutes: number;
   approval_mode: boolean;
+  response_delay_seconds?: number;
   /** Legacy booking link from migration 023. */
   booking_link: string | null;
   created_at: string;

@@ -87,6 +87,7 @@ export async function PATCH(
       'prompt_personality', 'prompt_goal', 'prompt_general_info',
       'model_name', 'temperature', 'max_tokens', 'channels',
       'takeover_mode', 'takeover_timeout_minutes', 'approval_mode',
+      'response_delay_seconds',
     ]
 
     const updates: Record<string, unknown> = {}
@@ -116,16 +117,21 @@ export async function PATCH(
         'id, account_id, name, description, is_active, system_prompt, ' +
         'prompt_personality, prompt_goal, prompt_general_info, ' +
         'model_name, temperature, max_tokens, channels, takeover_mode, ' +
-        'takeover_timeout_minutes, approval_mode, updated_at',
+        'takeover_timeout_minutes, approval_mode, response_delay_seconds, updated_at',
       )
       .single()
 
     if (updateResult.error) {
       const errMsg = updateResult.error.message
       const errCode = updateResult.error.code
-      if (errMsg.includes('approval_mode') || errCode === '42703') {
+      if (
+        errMsg.includes('approval_mode') || 
+        errMsg.includes('response_delay_seconds') || 
+        errCode === '42703'
+      ) {
         const retryUpdates = { ...updates }
         delete retryUpdates.approval_mode
+        delete retryUpdates.response_delay_seconds
 
         updateResult = await supabaseAdmin()
           .from('ai_agents')
@@ -141,6 +147,7 @@ export async function PATCH(
 
         if (updateResult.data) {
           updateResult.data.approval_mode = false
+          updateResult.data.response_delay_seconds = 0
         }
       }
     }

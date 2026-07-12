@@ -140,11 +140,12 @@ export async function callModel(
 
       // Extract cost from OpenRouter's response metadata.
       // OpenRouter includes generation cost in the response body
-      // under `usage` or in response headers.
+      // under `usage` (as `cost` or `total_cost`) or in response headers.
       const costUsd = parseFloat(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (data as any)?.usage?.total_cost?.toString() ?? '0',
-      )
+        data.usage?.cost?.toString() ??
+        data.usage?.total_cost?.toString() ??
+        '0',
+      );
 
       const choice = data.choices?.[0]
       if (!choice) {
@@ -219,8 +220,8 @@ interface OpenRouterResponse {
     prompt_tokens: number
     completion_tokens: number
     total_tokens: number
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    total_cost?: any
+    cost?: number
+    total_cost?: number
   }
 }
 

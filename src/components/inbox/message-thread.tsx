@@ -38,7 +38,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
 import {
@@ -225,11 +224,26 @@ export function MessageThread({
   // AI Takeover state
   const [isTogglingAI, setIsTogglingAI] = useState(false);
 
+  const isAIActive = useMemo(() => {
+    if (!conversation) return false;
+    if (conversation.ai_status === "disabled") return false;
+    if (conversation.ai_status === "active") return true;
+    if (conversation.ai_status === "paused") {
+      if (conversation.ai_paused_until) {
+        const pausedUntil = new Date(conversation.ai_paused_until);
+        if (pausedUntil.getTime() <= now) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }, [conversation, now]);
+
   const handleToggleAI = useCallback(async () => {
     if (!conversation?.id || isTogglingAI) return;
     setIsTogglingAI(true);
     try {
-      const isCurrentlyActive = conversation.ai_status === "active";
+      const isCurrentlyActive = isAIActive;
       const action = isCurrentlyActive ? "pause" : "resume";
       
       const res = await fetch("/api/ai/agents/takeover", {
@@ -254,7 +268,7 @@ export function MessageThread({
     } finally {
       setIsTogglingAI(false);
     }
-  }, [conversation, isTogglingAI]);
+  }, [conversation, isTogglingAI, isAIActive]);
 
   // Profiles are bounded by RLS to rows the current user is allowed to
   // see — today that's just the current user, but the dropdown keeps the
@@ -367,6 +381,7 @@ export function MessageThread({
   // realtime channel.
   useEffect(() => {
     if (!conversationId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setReactions([]);
       return;
     }
@@ -467,6 +482,7 @@ export function MessageThread({
   // Clear any in-progress reply draft when the active conversation changes —
   // a quote pulled from conversation A shouldn't bleed into conversation B.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setReplyTo(null);
   }, [conversationId]);
 
@@ -498,6 +514,28 @@ export function MessageThread({
       el.scrollTop = el.scrollHeight;
     }
   }, [messages]);
+
+  // Auto-resume AI in database if the pause timeout has expired
+  useEffect(() => {
+    if (!conversationId || conversation?.ai_status !== 'paused' || !conversation?.ai_paused_until) return;
+    const pausedUntil = new Date(conversation.ai_paused_until);
+    if (pausedUntil.getTime() <= now) {
+      const supabase = createClient();
+      supabase
+        .from('conversations')
+        .update({
+          ai_status: 'active',
+          ai_paused_until: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', conversationId)
+        .then(({ error }) => {
+          if (error) {
+            console.error('[inbox] Failed to auto-resume AI in database:', error);
+          }
+        });
+    }
+  }, [conversationId, conversation?.ai_status, conversation?.ai_paused_until, now]);
 
   const handleSend = useCallback(
     async (text: string, replyToId?: string) => {
@@ -815,7 +853,7 @@ export function MessageThread({
         setReactions(snapshot);
       }
     },
-    [conversation, user?.id],
+    [conversation, user],
   );
 
   const handleAssignChange = useCallback(
@@ -975,15 +1013,15 @@ export function MessageThread({
               onClick={handleToggleAI}
               disabled={isTogglingAI}
               aria-label="Toggle AI"
-              title={conversation.ai_status === "active" ? "Pause AI (Take Over)" : "Resume AI"}
+              title={isAIActive ? "Pause AI (Take Over)" : "Resume AI"}
               className={cn(
                 "inline-flex h-7 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors disabled:opacity-60",
-                conversation.ai_status === "active"
+                isAIActive
                   ? "bg-brand-green/10 text-brand-green hover:bg-brand-green/20"
                   : "bg-orange-500/10 text-orange-600 hover:bg-orange-500/20"
               )}
             >
-              {conversation.ai_status === "active" ? (
+              {isAIActive ? (
                 <>
                   <Bot className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">AI Active</span>
