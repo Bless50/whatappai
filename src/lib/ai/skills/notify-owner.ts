@@ -135,15 +135,47 @@ export const notifyOwnerSkill: SkillDefinition = {
         }
       }
 
-      // Skip direct Meta API for linked-phone sessions
+      // Support Linked Phone sessions by calling the WhatsApp Gateway
       if (waConfig.phone_number_id === 'linked-phone') {
+        const gatewayUrl = process.env.WHATSAPP_GATEWAY_URL;
+        if (!gatewayUrl) {
+          return {
+            success: false,
+            data:
+              'Customer information has been saved in the conversation thread. ' +
+              'Error: WHATSAPP_GATEWAY_URL is not configured on the server, ' +
+              'so the WhatsApp notification could not be sent to the owner.',
+          };
+        }
+
+        const sendUrl = gatewayUrl.endsWith('/api/messages/send')
+          ? gatewayUrl
+          : `${gatewayUrl.replace(/\/$/, '')}/api/messages/send`;
+
+        const sanitizedNotifyPhone = notifyPhone.replace(/\D/g, '');
+
+        const gatewayRes = await fetch(sendUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            accountId: context.accountId,
+            to: sanitizedNotifyPhone,
+            text: notificationText,
+          }),
+        });
+
+        if (!gatewayRes.ok) {
+          const errData = await gatewayRes.json().catch(() => ({ error: 'Unknown gateway error' }));
+          throw new Error(`Gateway send failed: ${errData.error || gatewayRes.statusText}`);
+        }
+
         return {
           success: true,
           data:
-            'Customer information has been saved in the conversation thread. ' +
-            'Direct notification is not supported for Linked Phone sessions. ' +
-            'Let the customer know their information has been received.',
-        }
+            'Customer information has been sent to the business owner via the WhatsApp Gateway ' +
+            'and saved in the conversation. Let the customer know their information ' +
+            'has been received and someone will follow up.',
+        };
       }
 
       // ============ 5. SEND WHATSAPP MESSAGE TO OWNER ============
