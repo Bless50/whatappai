@@ -141,11 +141,20 @@ export async function callModel(
       // Extract cost from OpenRouter's response metadata.
       // OpenRouter includes generation cost in the response body
       // under `usage` (as `cost` or `total_cost`) or in response headers.
-      const costUsd = parseFloat(
+      let costUsd = parseFloat(
         data.usage?.cost?.toString() ??
         data.usage?.total_cost?.toString() ??
         '0',
       );
+
+      // Fallback: estimate cost if OpenRouter returned 0
+      if (costUsd === 0 && data.usage) {
+        costUsd = estimateModelCost(
+          data.model ?? config.model,
+          data.usage.prompt_tokens || 0,
+          data.usage.completion_tokens || 0
+        );
+      }
 
       const choice = data.choices?.[0]
       if (!choice) {
@@ -231,4 +240,44 @@ interface OpenRouterResponse {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Estimate the cost of an LLM call in USD if OpenRouter doesn't provide it.
+ * Pricing is expressed per 1M (million) tokens.
+ */
+function estimateModelCost(
+  model: string,
+  promptTokens: number,
+  completionTokens: number
+): number {
+  const modelLower = model.toLowerCase();
+
+  // Pricing values: [inputCostPerMillion, outputCostPerMillion]
+  let rates = [0.5, 1.5]; // Default fallback: $0.50/M input, $1.50/M output
+
+  if (modelLower.includes('claude-3-haiku') || modelLower.includes('haiku-4') || modelLower.includes('haiku')) {
+    rates = [0.25, 1.25];
+  } else if (modelLower.includes('claude-3-5-sonnet') || modelLower.includes('claude-3.5-sonnet') || modelLower.includes('sonnet')) {
+    rates = [3.0, 15.0];
+  } else if (modelLower.includes('gemini-2.5-flash') || modelLower.includes('gemini-1.5-flash') || modelLower.includes('flash')) {
+    rates = [0.075, 0.30];
+  } else if (modelLower.includes('gemini-2.5-pro') || modelLower.includes('gemini-1.5-pro') || modelLower.includes('pro')) {
+    rates = [1.25, 5.0];
+  } else if (modelLower.includes('llama-3-8b') || modelLower.includes('llama-3.1-8b') || modelLower.includes('8b')) {
+    rates = [0.055, 0.055];
+  } else if (modelLower.includes('llama-3-70b') || modelLower.includes('llama-3.1-70b') || modelLower.includes('70b')) {
+    rates = [0.52, 0.75];
+  } else if (modelLower.includes('deepseek-chat') || modelLower.includes('deepseek-coder') || modelLower.includes('deepseek')) {
+    rates = [0.14, 0.28];
+  } else if (modelLower.includes('gpt-4o-mini') || modelLower.includes('mini')) {
+    rates = [0.15, 0.60];
+  } else if (modelLower.includes('gpt-4o')) {
+    rates = [2.5, 10.0];
+  }
+
+  const promptCost = (promptTokens / 1_000_000) * rates[0];
+  const completionCost = (completionTokens / 1_000_000) * rates[1];
+
+  return promptCost + completionCost;
 }
