@@ -109,8 +109,19 @@ export async function POST(
     }
 
     // 3. Build Prompt (using empty/mock IDs for CRM data since it's a test)
+    let masterPrompt = agent.system_prompt || ''
+    
+    // Stitch the GHL-style structured prompt fields together if any are present
+    if (agent.prompt_personality || agent.prompt_goal || agent.prompt_general_info) {
+      const parts = []
+      if (agent.prompt_personality) parts.push(`## Personality\n${agent.prompt_personality}`)
+      if (agent.prompt_goal) parts.push(`## Goal\n${agent.prompt_goal}`)
+      if (agent.prompt_general_info) parts.push(`## General Information\n${agent.prompt_general_info}`)
+      masterPrompt = parts.join('\n\n')
+    }
+
     const messages = await buildPrompt({
-      systemPrompt: agent.system_prompt,
+      systemPrompt: masterPrompt,
       contactId: '00000000-0000-0000-0000-000000000000', // Mock
       conversationId: '00000000-0000-0000-0000-000000000000', // Mock
       accountId: agent.account_id,
