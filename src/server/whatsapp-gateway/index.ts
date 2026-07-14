@@ -132,7 +132,7 @@ async function initSession(accountId: string): Promise<SessionData> {
       version,
       auth: state,
       printQRInTerminal: false,
-      logger: pino({ level: 'silent' }) as any, // Mute baileys noisy logs
+      logger: pino({ level: 'info' }) as any, // Mute baileys noisy logs
       browser: ['waCRM', 'Chrome', '1.0.0'], // Bypass bot detection naturally
     });
   } catch (err) {
@@ -344,6 +344,7 @@ async function initSession(accountId: string): Promise<SessionData> {
   });
 
   sock.ev.on('messages.upsert', async (m: MessagesUpsert) => {
+    console.log(`[Gateway] messages.upsert triggered: ${m.messages?.length || 0} messages. Type: ${m.type}`);
     for (const msg of m.messages) {
       // Skip status broadcast
       if (msg.key.remoteJid === 'status@broadcast') continue;
