@@ -17,12 +17,9 @@ interface GatewayStatusResponse {
   qr: string | null;
 }
 
-// Gateway base URL — reads from env or falls back to localhost:3001
-const GATEWAY_URL =
-  process.env.NEXT_PUBLIC_WHATSAPP_GATEWAY_URL ||
-  (typeof window !== 'undefined'
-    ? `${window.location.protocol}//${window.location.hostname}:3001`
-    : 'http://localhost:3001');
+// All gateway requests are proxied through the Next.js API to avoid
+// cross-origin DNS/CORS/CSP issues when the gateway is on a different domain.
+const PROXY_URL = '/api/whatsapp/gateway-proxy';
 
 // ============ COMPONENT ============
 
@@ -41,7 +38,7 @@ export function WebSessionConfig() {
     if (!accountId) return;
     try {
       const res = await fetch(
-        `${GATEWAY_URL}/api/session/status?accountId=${encodeURIComponent(accountId)}`
+        `${PROXY_URL}?action=status&accountId=${encodeURIComponent(accountId)}`
       );
       if (!res.ok) return;
       const data: GatewayStatusResponse = await res.json();
@@ -90,7 +87,7 @@ export function WebSessionConfig() {
     }
     try {
       setLoading(true);
-      const res = await fetch(`${GATEWAY_URL}/api/session/connect`, {
+      const res = await fetch(`${PROXY_URL}?action=connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId }),
@@ -121,7 +118,7 @@ export function WebSessionConfig() {
 
     try {
       setLoading(true);
-      const res = await fetch(`${GATEWAY_URL}/api/session/disconnect`, {
+      const res = await fetch(`${PROXY_URL}?action=disconnect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId }),
