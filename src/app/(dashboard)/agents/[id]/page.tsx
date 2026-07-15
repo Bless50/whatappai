@@ -50,6 +50,8 @@ interface AgentDetail {
   takeover_timeout_minutes: number;
   approval_mode: boolean;
   response_delay_seconds?: number;
+  auto_pause_enabled?: boolean;
+  auto_pause_keywords?: string[];
   has_api_key: boolean;
   created_at: string;
   updated_at: string;
@@ -350,6 +352,8 @@ export default function AgentConfigPage() {
   const [takeoverMode, setTakeoverMode] = useState("timeout");
   const [takeoverTimeout, setTakeoverTimeout] = useState(120);
   const [responseDelaySeconds, setResponseDelaySeconds] = useState(0);
+  const [autoPauseEnabled, setAutoPauseEnabled] = useState(true);
+  const [keywordsText, setKeywordsText] = useState("");
   const [kbIds, setKbIds] = useState<string[]>([]);
   const [skills, setSkills] = useState<string[]>([]);
   const [skillConfigs, setSkillConfigs] = useState<Record<string, Record<string, unknown>>>({});
@@ -379,6 +383,14 @@ export default function AgentConfigPage() {
       setTakeoverTimeout(a.takeover_timeout_minutes ?? 120);
       setResponseDelaySeconds(a.response_delay_seconds ?? 0);
       setApprovalMode(a.approval_mode ?? false);
+      setAutoPauseEnabled(a.auto_pause_enabled !== false);
+      setKeywordsText((a.auto_pause_keywords ?? [
+        "stop", "unsubscribe", "pause", "human", "talk to a human", 
+        "talk to a real person", "speak to a human", "speak to a real person", 
+        "pass me on to a boss", "chat with a human", "talk to human", 
+        "human agent", "real person", "speak to human", "talk to person", 
+        "talk to a person", "stop bot", "pause bot", "stop the bot", "pause the bot"
+      ]).join(", "));
       
       // Extract KB IDs
       const kbLinks = a.ai_agent_knowledge_bases ?? [];
@@ -442,6 +454,8 @@ export default function AgentConfigPage() {
         takeover_timeout_minutes: takeoverTimeout,
         response_delay_seconds: responseDelaySeconds,
         approval_mode: approvalMode,
+        auto_pause_enabled: autoPauseEnabled,
+        auto_pause_keywords: keywordsText.split(",").map(k => k.trim()).filter(k => k.length > 0),
         knowledge_base_ids: kbIds,
         skills: skills,
         skill_configs: skillConfigs,
@@ -612,6 +626,34 @@ export default function AgentConfigPage() {
                 </div>
                 <Switch checked={approvalMode} onCheckedChange={setApprovalMode} />
               </div>
+
+              <div className="flex items-center justify-between rounded-lg border p-4">
+                <div>
+                  <p className="font-medium">Auto-Pause on Keywords</p>
+                  <p className="text-sm text-muted-foreground">
+                    When enabled, the AI automatically pauses itself and notifies the owner if the user types keywords like &quot;stop&quot; or &quot;talk to a human&quot;.
+                  </p>
+                </div>
+                <Switch checked={autoPauseEnabled} onCheckedChange={setAutoPauseEnabled} />
+              </div>
+
+              {autoPauseEnabled && (
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">
+                    Auto-Pause Trigger Keywords/Phrases
+                  </label>
+                  <textarea
+                    value={keywordsText}
+                    onChange={(e) => setKeywordsText(e.target.value)}
+                    rows={3}
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary"
+                    placeholder="Enter comma-separated keywords/phrases, e.g. stop, unsubscribe, talk to human"
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Provide a comma-separated list of words or phrases that should pause the bot. Case-insensitive.
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="mb-1.5 block text-sm font-medium">

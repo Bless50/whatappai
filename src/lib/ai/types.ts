@@ -41,6 +41,8 @@ export interface AIAgent {
   takeover_timeout_minutes: number;
   approval_mode: boolean;
   response_delay_seconds?: number;
+  auto_pause_enabled?: boolean;
+  auto_pause_keywords?: string[];
   /** Legacy booking link from migration 023. */
   booking_link: string | null;
   created_at: string;

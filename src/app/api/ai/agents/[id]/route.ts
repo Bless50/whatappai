@@ -87,7 +87,7 @@ export async function PATCH(
       'prompt_personality', 'prompt_goal', 'prompt_general_info',
       'model_name', 'temperature', 'max_tokens', 'channels',
       'takeover_mode', 'takeover_timeout_minutes', 'approval_mode',
-      'response_delay_seconds',
+      'response_delay_seconds', 'auto_pause_enabled', 'auto_pause_keywords',
     ]
 
     const updates: Record<string, unknown> = {}
@@ -117,7 +117,8 @@ export async function PATCH(
         'id, account_id, name, description, is_active, system_prompt, ' +
         'prompt_personality, prompt_goal, prompt_general_info, ' +
         'model_name, temperature, max_tokens, channels, takeover_mode, ' +
-        'takeover_timeout_minutes, approval_mode, response_delay_seconds, updated_at',
+        'takeover_timeout_minutes, approval_mode, response_delay_seconds, ' +
+        'auto_pause_enabled, auto_pause_keywords, updated_at',
       )
       .single()
 
@@ -127,11 +128,15 @@ export async function PATCH(
       if (
         errMsg.includes('approval_mode') || 
         errMsg.includes('response_delay_seconds') || 
+        errMsg.includes('auto_pause_enabled') || 
+        errMsg.includes('auto_pause_keywords') || 
         errCode === '42703'
       ) {
         const retryUpdates = { ...updates }
         delete retryUpdates.approval_mode
         delete retryUpdates.response_delay_seconds
+        delete retryUpdates.auto_pause_enabled
+        delete retryUpdates.auto_pause_keywords
 
         updateResult = await supabaseAdmin()
           .from('ai_agents')
@@ -148,6 +153,8 @@ export async function PATCH(
         if (updateResult.data) {
           updateResult.data.approval_mode = false
           updateResult.data.response_delay_seconds = 0
+          updateResult.data.auto_pause_enabled = true
+          updateResult.data.auto_pause_keywords = []
         }
       }
     }

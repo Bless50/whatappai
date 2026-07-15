@@ -61,195 +61,250 @@ export async function executeAgent(
   const db = supabaseAdmin()
   let isLinkedPhone = false
 
-  try {
-    // ============ 1. DECRYPT API KEY ============
-    const apiKey = agent.openrouter_api_key ?? agent.openrouter_key
-    if (!apiKey) {
-      console.warn(`[ai/engine] Agent ${agent.id} has no API key configured`)
-      return null
-    }
-    const decryptedKey = decrypt(apiKey)
+  let isAutoPause = false
+  let replyText = ''
 
-    // ============ TRIGGER TYPING STATUS ============
-    const isWhatsApp = !input.channel || input.channel === 'whatsapp'
-    if (isWhatsApp) {
-      const { data: waConfig } = await db
-        .from('whatsapp_config')
-        .select('phone_number_id')
-        .eq('account_id', input.accountId)
-        .maybeSingle()
-      if (waConfig?.phone_number_id === 'linked-phone') {
-        isLinkedPhone = true
+  try {
+    // ============ AUTO-PAUSE CHECK (SYSTEM LEVEL) ============
+    const autoPauseEnabled = agent.auto_pause_enabled !== false // defaults to true
+    if (autoPauseEnabled) {
+      const keywords = agent.auto_pause_keywords && agent.auto_pause_keywords.length > 0
+        ? agent.auto_pause_keywords
+        : [
+            "stop", "unsubscribe", "pause", "human", "talk to a human", 
+            "talk to a real person", "speak to a human", "speak to a real person", 
+            "pass me on to a boss", "chat with a human", "talk to human", 
+            "human agent", "real person", "speak to human", "talk to person", 
+            "talk to a person", "stop bot", "pause bot", "stop the bot", "pause the bot"
+          ]
+
+      const autoPauseResult = shouldAutoPause(input.messageText, keywords)
+      if (autoPauseResult.matches) {
+        isAutoPause = true
+        console.log(`[ai/engine] Auto-pause triggered by keyword: "${autoPauseResult.matchedKeyword}"`)
+
+        // Determine pause behavior based on agent's takeover mode
+        let pausedUntil: string | null = null
+        if (agent.takeover_mode === 'timeout') {
+          const timeoutMs = (agent.takeover_timeout_minutes ?? 120) * 60 * 1000
+          pausedUntil = new Date(Date.now() + timeoutMs).toISOString()
+        }
+
+        // 1. Pause the AI on this conversation
+        await db
+          .from('conversations')
+          .update({
+            ai_status: 'paused',
+            ai_paused_until: pausedUntil,
+            status: 'open', // Ensure it shows in the inbox
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', input.conversationId)
+
+        // 2. Insert a system-level note so the owner/agent knows why it was paused
+        await db.from('messages').insert({
+          conversation_id: input.conversationId,
+          sender_type: 'bot',
+          content_type: 'text',
+          content_text: `⚠️ AI Auto-Escalation: Conversation paused due to user keyword "${autoPauseResult.matchedKeyword}".`,
+          status: 'delivered',
+        })
+
+        replyText = `Understood. I have paused the AI assistant. A team member will follow up with you shortly.`
       }
     }
 
-    const delaySeconds = agent.response_delay_seconds ?? 0
-    // Trigger typing immediately ONLY if there is no response delay configured.
-    // If a delay is set, we wait silently first and trigger typing right before sending.
-    if (isLinkedPhone && delaySeconds === 0) {
-      void setGatewayPresence(input.accountId, input.contactId, 'composing')
-    }
-
-    // ============ 2. LOAD AGENT SKILLS ============
-    const { data: skillRows } = await db
-      .from('ai_agent_skills')
-      .select('*')
-      .eq('agent_id', agent.id)
-      .eq('is_enabled', true)
-
-    const skills: AIAgentSkill[] = skillRows ?? []
-    const toolDefs: ToolDefinition[] = []
-    for (const skill of skills) {
-      const def = getSkillDefinition(skill.skill_type)
-      if (def) toolDefs.push(def.tool)
-    }
-
-    // ============ 3. RAG — SEARCH KNOWLEDGE BASES ============
-    let knowledgeContext: string | undefined
-    const { data: kbLinks } = await db
-      .from('ai_agent_knowledge_bases')
-      .select('knowledge_base_id')
-      .eq('agent_id', agent.id)
-      .limit(1)
-
-    if (kbLinks && kbLinks.length > 0) {
-      knowledgeContext = await searchKnowledgeBases(agent.id, input.messageText, decryptedKey)
-    }
-
-    // ============ 4. BUILD PROMPT ============
-    let masterPrompt = agent.system_prompt
-    
-    // Stitch the GHL-style structured prompt fields together if any are present
-    if (agent.prompt_personality || agent.prompt_goal || agent.prompt_general_info) {
-      const parts = []
-      if (agent.prompt_personality) parts.push(`## Personality\n${agent.prompt_personality}`)
-      if (agent.prompt_goal) parts.push(`## Goal\n${agent.prompt_goal}`)
-      if (agent.prompt_general_info) parts.push(`## General Information\n${agent.prompt_general_info}`)
-      masterPrompt = parts.join('\n\n')
-    }
-
-    const messages = await buildPrompt({
-      systemPrompt: masterPrompt,
-      contactId: input.contactId,
-      conversationId: input.conversationId,
-      accountId: input.accountId,
-      inboundText: input.messageText,
-      knowledgeContext,
-    })
-
-    // ============ 5. CALL LLM (with tool-use loop) ============
-    const modelConfig: ModelConfig = {
-      model: agent.model_name,
-      temperature: agent.temperature,
-      max_tokens: agent.max_tokens,
-      apiKey: decryptedKey,
-    }
-
-    let response: ModelResponse | null = null
-    const currentMessages = [...messages]
     let totalPromptTokens = 0
     let totalCompletionTokens = 0
     let totalCost = 0
+    let response: ModelResponse | null = null
 
-    for (let iteration = 0; iteration <= MAX_TOOL_ITERATIONS; iteration++) {
-      response = await callModel(
-        modelConfig,
-        currentMessages,
-        toolDefs.length > 0 ? toolDefs : undefined,
-      )
-
-      totalPromptTokens += response.usage.prompt_tokens
-      totalCompletionTokens += response.usage.completion_tokens
-      totalCost += response.cost_usd
-
-      // If no tool calls, we have the final response
-      if (!response.tool_calls || response.tool_calls.length === 0) {
-        break
+    if (!isAutoPause) {
+      // ============ 1. DECRYPT API KEY ============
+      const apiKey = agent.openrouter_api_key ?? agent.openrouter_key
+      if (!apiKey) {
+        console.warn(`[ai/engine] Agent ${agent.id} has no API key configured`)
+        return null
       }
+      const decryptedKey = decrypt(apiKey)
 
-      // If this is the last iteration, break to prevent infinite loops
-      if (iteration === MAX_TOOL_ITERATIONS) {
-        console.warn(
-          `[ai/engine] Agent ${agent.id} hit max tool iterations (${MAX_TOOL_ITERATIONS})`,
-        )
-        break
-      }
-
-      // ============ EXECUTE TOOL CALLS ============
-      const skillContext: SkillContext = {
-        accountId: input.accountId,
-        contactId: input.contactId,
-        conversationId: input.conversationId,
-        agentId: agent.id,
-      }
-
-      // Add assistant's tool-call message to history
-      currentMessages.push({
-        role: 'assistant',
-        content: response.content,
-        tool_calls: response.tool_calls,
-      })
-
-      // Execute each tool call and add results
-      for (const toolCall of response.tool_calls) {
-        const skillType = toolCall.function.name
-        const def = getSkillDefinition(skillType)
-
-        let resultText: string
-        if (!def) {
-          resultText = `Error: Unknown tool "${skillType}"`
-          console.warn(`[ai/engine] LLM called unknown tool: ${skillType}`)
-        } else {
-          try {
-            const params = JSON.parse(toolCall.function.arguments)
-            const result = await def.execute(params, skillContext)
-            resultText = result.data
-          } catch (err) {
-            resultText = `Error executing ${skillType}: ${err instanceof Error ? err.message : String(err)}`
-            console.error(`[ai/engine] Skill ${skillType} failed:`, err)
-          }
+      // ============ TRIGGER TYPING STATUS ============
+      const isWhatsApp = !input.channel || input.channel === 'whatsapp'
+      if (isWhatsApp) {
+        const { data: waConfig } = await db
+          .from('whatsapp_config')
+          .select('phone_number_id')
+          .eq('account_id', input.accountId)
+          .maybeSingle()
+        if (waConfig?.phone_number_id === 'linked-phone') {
+          isLinkedPhone = true
         }
-
-        currentMessages.push({
-          role: 'tool',
-          content: resultText,
-          tool_call_id: toolCall.id,
-          name: skillType,
-        })
-      }
-    }
-
-    if (!response?.content) {
-      console.warn(`[ai/engine] Agent ${agent.id} produced no response content`)
-      if (isLinkedPhone) {
-        void setGatewayPresence(input.accountId, input.contactId, 'paused')
-      }
-      return null
-    }
-
-    // ============ HUMAN-LIKE RESPONSE DELAY ============
-    if (delaySeconds > 0) {
-      const safeDelay = Math.min(delaySeconds, 45) // Cap at 45s for serverless stability
-      const typingTime = Math.min(3, safeDelay) // Typing indicator active for up to 3s
-      const silentDelay = safeDelay - typingTime
-
-      if (silentDelay > 0) {
-        await new Promise((resolve) => setTimeout(resolve, silentDelay * 1000))
       }
 
-      if (isLinkedPhone) {
+      const delaySeconds = agent.response_delay_seconds ?? 0
+      // Trigger typing immediately ONLY if there is no response delay configured.
+      // If a delay is set, we wait silently first and trigger typing right before sending.
+      if (isLinkedPhone && delaySeconds === 0) {
         void setGatewayPresence(input.accountId, input.contactId, 'composing')
       }
 
-      if (typingTime > 0) {
-        await new Promise((resolve) => setTimeout(resolve, typingTime * 1000))
+      // ============ 2. LOAD AGENT SKILLS ============
+      const { data: skillRows } = await db
+        .from('ai_agent_skills')
+        .select('*')
+        .eq('agent_id', agent.id)
+        .eq('is_enabled', true)
+
+      const skills: AIAgentSkill[] = skillRows ?? []
+      const toolDefs: ToolDefinition[] = []
+      for (const skill of skills) {
+        const def = getSkillDefinition(skill.skill_type)
+        if (def) toolDefs.push(def.tool)
       }
+
+      // ============ 3. RAG — SEARCH KNOWLEDGE BASES ============
+      let knowledgeContext: string | undefined
+      const { data: kbLinks } = await db
+        .from('ai_agent_knowledge_bases')
+        .select('knowledge_base_id')
+        .eq('agent_id', agent.id)
+        .limit(1)
+
+      if (kbLinks && kbLinks.length > 0) {
+        knowledgeContext = await searchKnowledgeBases(agent.id, input.messageText, decryptedKey)
+      }
+
+      // ============ 4. BUILD PROMPT ============
+      let masterPrompt = agent.system_prompt
+      
+      // Stitch the GHL-style structured prompt fields together if any are present
+      if (agent.prompt_personality || agent.prompt_goal || agent.prompt_general_info) {
+        const parts = []
+        if (agent.prompt_personality) parts.push(`## Personality\n${agent.prompt_personality}`)
+        if (agent.prompt_goal) parts.push(`## Goal\n${agent.prompt_goal}`)
+        if (agent.prompt_general_info) parts.push(`## General Information\n${agent.prompt_general_info}`)
+        masterPrompt = parts.join('\n\n')
+      }
+
+      const messages = await buildPrompt({
+        systemPrompt: masterPrompt,
+        contactId: input.contactId,
+        conversationId: input.conversationId,
+        accountId: input.accountId,
+        inboundText: input.messageText,
+        knowledgeContext,
+      })
+
+      // ============ 5. CALL LLM (with tool-use loop) ============
+      const modelConfig: ModelConfig = {
+        model: agent.model_name,
+        temperature: agent.temperature,
+        max_tokens: agent.max_tokens,
+        apiKey: decryptedKey,
+      }
+
+      const currentMessages = [...messages]
+
+      for (let iteration = 0; iteration <= MAX_TOOL_ITERATIONS; iteration++) {
+        response = await callModel(
+          modelConfig,
+          currentMessages,
+          toolDefs.length > 0 ? toolDefs : undefined,
+        )
+
+        totalPromptTokens += response.usage.prompt_tokens
+        totalCompletionTokens += response.usage.completion_tokens
+        totalCost += response.cost_usd
+
+        // If no tool calls, we have the final response
+        if (!response.tool_calls || response.tool_calls.length === 0) {
+          break
+        }
+
+        // If this is the last iteration, break to prevent infinite loops
+        if (iteration === MAX_TOOL_ITERATIONS) {
+          console.warn(
+            `[ai/engine] Agent ${agent.id} hit max tool iterations (${MAX_TOOL_ITERATIONS})`,
+          )
+          break
+        }
+
+        // ============ EXECUTE TOOL CALLS ============
+        const skillContext: SkillContext = {
+          accountId: input.accountId,
+          contactId: input.contactId,
+          conversationId: input.conversationId,
+          agentId: agent.id,
+        }
+
+        // Add assistant's tool-call message to history
+        currentMessages.push({
+          role: 'assistant',
+          content: response.content,
+          tool_calls: response.tool_calls,
+        })
+
+        // Execute each tool call and add results
+        for (const toolCall of response.tool_calls) {
+          const skillType = toolCall.function.name
+          const def = getSkillDefinition(skillType)
+
+          let resultText: string
+          if (!def) {
+            resultText = `Error: Unknown tool "${skillType}"`
+            console.warn(`[ai/engine] LLM called unknown tool: ${skillType}`)
+          } else {
+            try {
+              const params = JSON.parse(toolCall.function.arguments)
+              const result = await def.execute(params, skillContext)
+              resultText = result.data
+            } catch (err) {
+              resultText = `Error executing ${skillType}: ${err instanceof Error ? err.message : String(err)}`
+              console.error(`[ai/engine] Skill ${skillType} failed:`, err)
+            }
+          }
+
+          currentMessages.push({
+            role: 'tool',
+            content: resultText,
+            tool_call_id: toolCall.id,
+            name: skillType,
+          })
+        }
+      }
+
+      if (!response?.content) {
+        console.warn(`[ai/engine] Agent ${agent.id} produced no response content`)
+        if (isLinkedPhone) {
+          void setGatewayPresence(input.accountId, input.contactId, 'paused')
+        }
+        return null
+      }
+
+      // ============ HUMAN-LIKE RESPONSE DELAY ============
+      if (delaySeconds > 0) {
+        const safeDelay = Math.min(delaySeconds, 45) // Cap at 45s for serverless stability
+        const typingTime = Math.min(3, safeDelay) // Typing indicator active for up to 3s
+        const silentDelay = safeDelay - typingTime
+
+        if (silentDelay > 0) {
+          await new Promise((resolve) => setTimeout(resolve, silentDelay * 1000))
+        }
+
+        if (isLinkedPhone) {
+          void setGatewayPresence(input.accountId, input.contactId, 'composing')
+        }
+
+        if (typingTime > 0) {
+          await new Promise((resolve) => setTimeout(resolve, typingTime * 1000))
+        }
+      }
+
+      replyText = response.content
     }
 
     // ============ 6. SEND REPLY (WITH APPROVAL & CHANNEL ROUTING) ============
-    const replyText = response.content
-
-    if (agent.approval_mode) {
+    if (agent.approval_mode && !isAutoPause && response) {
       // Create a pending approval message instead of sending it
       const messageId = `draft-${crypto.randomUUID()}`
       await db.from('messages').insert({
@@ -606,22 +661,26 @@ export async function executeAgent(
     }
 
     // ============ 7. LOG USAGE ============
-    const latencyMs = Date.now() - startMs
+    if (!isAutoPause && response) {
+      const latencyMs = Date.now() - startMs
 
-    await db.from('ai_conversation_logs').insert({
-      agent_id: agent.id,
-      conversation_id: input.conversationId,
-      model_used: response.model,
-      prompt_tokens: totalPromptTokens,
-      completion_tokens: totalCompletionTokens,
-      total_cost_usd: totalCost,
-      latency_ms: latencyMs,
-    })
+      await db.from('ai_conversation_logs').insert({
+        agent_id: agent.id,
+        conversation_id: input.conversationId,
+        model_used: response.model,
+        prompt_tokens: totalPromptTokens,
+        completion_tokens: totalCompletionTokens,
+        total_cost_usd: totalCost,
+        latency_ms: latencyMs,
+      })
 
-    console.log(
-      `[ai/engine] Agent "${agent.name}" replied in ${latencyMs}ms ` +
-      `(${totalPromptTokens}+${totalCompletionTokens} tokens, $${totalCost.toFixed(6)})`,
-    )
+      console.log(
+        `[ai/engine] Agent "${agent.name}" replied in ${latencyMs}ms ` +
+        `(${totalPromptTokens}+${totalCompletionTokens} tokens, $${totalCost.toFixed(6)})`,
+      )
+    } else if (isAutoPause) {
+      console.log(`[ai/engine] Bypassed usage logging for auto-paused conversation ${input.conversationId}.`)
+    }
 
     return replyText
   } catch (err) {
@@ -631,6 +690,42 @@ export async function executeAgent(
     }
     return null
   }
+}
+
+/**
+ * Check if the user message matches any auto-pause keywords/phrases.
+ * Handles exact word matches for short words, and substring matches for phrases.
+ */
+export function shouldAutoPause(
+  text: string,
+  keywords: string[],
+): { matches: boolean; matchedKeyword?: string } {
+  if (!text) return { matches: false }
+  
+  const normalized = text.toLowerCase().trim()
+  
+  // Clean punctuation from start/end for exact matching (e.g. "stop!" -> "stop")
+  const cleanExact = normalized.replace(/^[.,\/#!$%\^&\*;:{}=\-_`~()?]+|[.,\/#!$%\^&\*;:{}=\-_`~()?]+$/g, "")
+
+  for (const rawKeyword of keywords) {
+    const keyword = rawKeyword.toLowerCase().trim()
+    if (!keyword) continue
+
+    // If the keyword is short (5 chars or less, or a single word), check for exact match
+    // to avoid false positives (like "I will stop by" matching "stop").
+    if (keyword.length <= 5 || !keyword.includes(" ")) {
+      if (cleanExact === keyword) {
+        return { matches: true, matchedKeyword: rawKeyword }
+      }
+    } else {
+      // For longer phrases, check if the phrase exists as a substring
+      if (normalized.includes(keyword)) {
+        return { matches: true, matchedKeyword: rawKeyword }
+      }
+    }
+  }
+
+  return { matches: false }
 }
 
 // ============================================================
