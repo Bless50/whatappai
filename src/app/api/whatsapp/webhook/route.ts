@@ -1,7 +1,6 @@
 import { NextResponse, after } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
@@ -635,10 +634,9 @@ async function processMessage(
   // (see supabase/migrations/001_initial_schema.sql):
   //   conversation_id, sender_type, content_type, content_text,
   //   media_url, template_name, message_id, status, created_at
-  // `mediaType` is intentionally unused — the schema has no media_type
-  // column; the MIME type is only used to construct the proxy URL during
-  // parseMessageContent. Silence the unused-var warning:
-  void mediaType
+  // `mediaType` is used by the AI dispatcher (audio transcription /
+  // image vision) but NOT stored in the DB — there is no media_type
+  // column in the messages table.
 
   // The messages.content_type CHECK constraint (widened in migration 010
   // to add 'interactive' for button/list taps) allows:
@@ -843,24 +841,14 @@ async function parseMessageContent(
    */
   interactiveReplyId: string | null
 }> {
-  // getMediaUrl signature is (mediaId, accessToken) — earlier code had
-  // the args swapped, so every verification hit an invalid Meta URL and
-  // fell through to the catch block, leaving mediaUrl as null. That's
-  // why images showed up as empty bubbles in the inbox.
-  const verifyAndBuildUrl = async (
-    mediaId: string
-  ): Promise<string | null> => {
-    try {
-      await getMediaUrl({ mediaId, accessToken })
-      return `/api/whatsapp/media/${mediaId}`
-    } catch (error) {
-      console.error(
-        `Failed to verify media ${mediaId} with Meta:`,
-        error instanceof Error ? error.message : error
-      )
-      return null
-    }
-  }
+  // Build a proxy URL from the media ID. The actual Meta CDN fetch
+  // happens when the client (inbox UI or AI engine) hits the proxy
+  // route /api/whatsapp/media/[mediaId]. Previously this function
+  // called getMediaUrl() to verify the ID upfront, but that added
+  // latency and — more critically — returned null on transient Meta
+  // errors, permanently marking the message as "media unavailable".
+  const buildProxyUrl = (mediaId: string): string =>
+    `/api/whatsapp/media/${mediaId}`
 
   // Default shape — each case overrides only the fields it cares about.
   // Keeps the new `interactiveReplyId` field DRY across every return site.
@@ -880,7 +868,7 @@ async function parseMessageContent(
         return {
           ...empty,
           contentText: message.image.caption || null,
-          mediaUrl: await verifyAndBuildUrl(message.image.id),
+          mediaUrl: buildProxyUrl(message.image.id),
           mediaType: message.image.mime_type,
         }
       }
@@ -891,7 +879,7 @@ async function parseMessageContent(
         return {
           ...empty,
           contentText: message.video.caption || null,
-          mediaUrl: await verifyAndBuildUrl(message.video.id),
+          mediaUrl: buildProxyUrl(message.video.id),
           mediaType: message.video.mime_type,
         }
       }
@@ -903,7 +891,7 @@ async function parseMessageContent(
           ...empty,
           contentText:
             message.document.caption || message.document.filename || null,
-          mediaUrl: await verifyAndBuildUrl(message.document.id),
+          mediaUrl: buildProxyUrl(message.document.id),
           mediaType: message.document.mime_type,
         }
       }
@@ -913,7 +901,7 @@ async function parseMessageContent(
       if (message.audio?.id) {
         return {
           ...empty,
-          mediaUrl: await verifyAndBuildUrl(message.audio.id),
+          mediaUrl: buildProxyUrl(message.audio.id),
           mediaType: message.audio.mime_type,
         }
       }
@@ -926,7 +914,7 @@ async function parseMessageContent(
       if (message.sticker?.id) {
         return {
           ...empty,
-          mediaUrl: await verifyAndBuildUrl(message.sticker.id),
+          mediaUrl: buildProxyUrl(message.sticker.id),
           mediaType: message.sticker.mime_type,
         }
       }
