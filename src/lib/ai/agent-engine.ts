@@ -352,14 +352,7 @@ export async function executeAgent(
       })
 
       // ============ 5. CALL LLM (with tool-use loop) ============
-      let activeModelName = agent.model_name
-      if (hasInboundImage) {
-        if (activeModelName === 'deepseek/deepseek-v4-flash') {
-          activeModelName = 'deepseek/deepseek-v4-pro'
-        } else if (activeModelName.endsWith('-flash')) {
-          activeModelName = activeModelName.slice(0, -6) + '-pro'
-        }
-      }
+      const activeModelName = agent.model_name
 
       const modelConfig: ModelConfig = {
         model: activeModelName,
