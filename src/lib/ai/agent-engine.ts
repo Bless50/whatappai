@@ -31,7 +31,7 @@ import { buildPrompt } from './prompt-builder'
 import { getSkillDefinition } from './skills'
 import { supabaseAdmin } from './admin-client'
 import { decrypt } from '@/lib/whatsapp/encryption'
-import { sendTextMessage } from '@/lib/whatsapp/meta-api'
+import { sendTextMessage, getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
 import { generateEmbeddings } from './embedding-client'
 import { replyToComment, sendDirectMessage } from '@/lib/tiktok/tiktok-api'
 
@@ -65,6 +65,80 @@ export async function executeAgent(
   let replyText = ''
 
   try {
+    // ============ DYNAMIC AUDIO TRANSCRIPTION (SYSTEM LEVEL via Groq) ============
+    if (input.mediaUrl && input.mediaType && input.mediaType.startsWith('audio/')) {
+      const groqApiKey = process.env.GROQ_API_KEY
+      if (!groqApiKey) {
+        console.warn('[ai/engine] GROQ_API_KEY is not configured. Skipping audio transcription.')
+      } else {
+        try {
+          console.log(`[ai/engine] Downloading audio for transcription: ${input.mediaUrl}`)
+          const mediaId = input.mediaUrl.split('/').pop()
+          if (mediaId) {
+            const mediaInfo = await getMediaUrl({ mediaId, accessToken: input.accessToken })
+            const { buffer, contentType } = await downloadMedia({
+              downloadUrl: mediaInfo.url,
+              accessToken: input.accessToken
+            })
+
+            const transcription = await transcribeAudioWithGroq(
+              buffer,
+              `voice-${mediaId}.ogg`,
+              contentType || input.mediaType,
+              groqApiKey
+            )
+
+            if (transcription) {
+              console.log(`[ai/engine] Transcribed text: "${transcription}"`)
+              input.messageText = transcription
+
+              // Update the messages table in DB with the transcription text for Inbox view
+              const { data: lastMsg } = await db
+                .from('messages')
+                .select('id')
+                .eq('conversation_id', input.conversationId)
+                .eq('sender_type', 'customer')
+                .eq('content_type', 'audio')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+
+              if (lastMsg?.id) {
+                await db
+                  .from('messages')
+                  .update({ content_text: `🎙️ Transcription: ${transcription}` })
+                  .eq('id', lastMsg.id)
+              }
+            }
+          }
+        } catch (transcribeErr) {
+          console.error('[ai/engine] Audio transcription failed:', transcribeErr)
+        }
+      }
+    }
+
+    // ============ IMAGE VISION PREPARATION (SYSTEM LEVEL) ============
+    let inboundImageBase64: string | null = null
+    let inboundImageMimeType: string | null = null
+
+    if (input.mediaUrl && input.mediaType && input.mediaType.startsWith('image/')) {
+      try {
+        console.log(`[ai/engine] Downloading image for vision analysis: ${input.mediaUrl}`)
+        const mediaId = input.mediaUrl.split('/').pop()
+        if (mediaId) {
+          const mediaInfo = await getMediaUrl({ mediaId, accessToken: input.accessToken })
+          const { buffer, contentType } = await downloadMedia({
+            downloadUrl: mediaInfo.url,
+            accessToken: input.accessToken
+          })
+          inboundImageBase64 = buffer.toString('base64')
+          inboundImageMimeType = contentType || input.mediaType
+        }
+      } catch (imageErr) {
+        console.error('[ai/engine] Image download for vision failed:', imageErr)
+      }
+    }
+
     // ============ AUTO-PAUSE CHECK (SYSTEM LEVEL) ============
     const autoPauseEnabled = agent.auto_pause_enabled !== false // defaults to true
     if (autoPauseEnabled) {
@@ -193,6 +267,8 @@ export async function executeAgent(
         accountId: input.accountId,
         inboundText: input.messageText,
         knowledgeContext,
+        inboundImageBase64,
+        inboundImageMimeType,
       })
 
       // ============ 5. CALL LLM (with tool-use loop) ============
@@ -726,6 +802,37 @@ export function shouldAutoPause(
   }
 
   return { matches: false }
+}
+
+/**
+ * Transcribe an audio file using Groq Whisper API.
+ */
+async function transcribeAudioWithGroq(
+  audioBuffer: Buffer,
+  filename: string,
+  mimeType: string,
+  apiKey: string
+): Promise<string> {
+  const formData = new FormData()
+  const blob = new Blob([audioBuffer], { type: mimeType })
+  formData.append('file', blob, filename)
+  formData.append('model', 'whisper-large-v3')
+
+  const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: formData
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`Groq Whisper failed: ${response.status} - ${errorText}`)
+  }
+
+  const result = await response.json()
+  return result.text || ''
 }
 
 // ============================================================

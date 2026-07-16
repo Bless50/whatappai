@@ -146,9 +146,13 @@ export interface AIConversationLog {
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
+export type ChatContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
 export interface ChatMessage {
   role: ChatRole;
-  content: string | null;
+  content: string | ChatContentBlock[] | null;
   /** Present when role is 'assistant' and the model wants to call tools. */
   tool_calls?: ToolCall[];
   /** Present when role is 'tool' — the id of the tool call this responds to. */
@@ -220,6 +224,8 @@ export interface AIDispatchInput {
   accessToken: string;
   /** Message channel — currently always 'whatsapp'. */
   channel?: AIAgentChannel;
+  mediaUrl?: string | null;
+  mediaType?: string | null;
 }
 
 export interface AIDispatchResult {

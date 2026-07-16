@@ -45,6 +45,8 @@ export interface PromptContext {
   knowledgeContext?: string
   /** Max tokens for the full prompt (to budget sections). */
   maxContextTokens?: number
+  inboundImageBase64?: string | null
+  inboundImageMimeType?: string | null
 }
 
 /**
@@ -117,10 +119,25 @@ export async function buildPrompt(ctx: PromptContext): Promise<ChatMessage[]> {
   messages.push(...history)
 
   // ============ 3. CURRENT MESSAGE ============
-  messages.push({
-    role: 'user',
-    content: ctx.inboundText,
-  })
+  if (ctx.inboundImageBase64 && ctx.inboundImageMimeType) {
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: ctx.inboundText || 'Describe this image' },
+        {
+          type: 'image_url',
+          image_url: {
+            url: `data:${ctx.inboundImageMimeType};base64,${ctx.inboundImageBase64}`
+          }
+        }
+      ]
+    })
+  } else {
+    messages.push({
+      role: 'user',
+      content: ctx.inboundText,
+    })
+  }
 
   return messages
 }

@@ -806,6 +806,8 @@ async function processMessage(
       userId: configOwnerUserId,
       accessToken,
       channel: 'whatsapp',
+      mediaUrl: mediaUrl || null,
+      mediaType: mediaType || null,
     }).catch((err) => console.error('[ai-agent] dispatch failed:', err))
   }
 
