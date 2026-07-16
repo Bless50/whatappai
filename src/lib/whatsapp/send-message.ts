@@ -236,14 +236,6 @@ export async function sendMessageToConversation(
   }
 
   if (config.phone_number_id === 'linked-phone') {
-    if (messageType !== 'text') {
-      throw new SendMessageError(
-        'bad_request',
-        'Linked Phone integration currently only supports text messages.',
-        400
-      );
-    }
-
     const gatewayUrl = process.env.WHATSAPP_GATEWAY_URL;
     if (!gatewayUrl) {
       console.error(
@@ -270,6 +262,7 @@ export async function sendMessageToConversation(
         sender_type: 'agent',
         content_type: messageType,
         content_text: contentText || null,
+        media_url: mediaUrl || null,
         message_id: waMessageIdPlaceholder,
         status: 'sent',
         channel: 'whatsapp',
@@ -295,7 +288,10 @@ export async function sendMessageToConversation(
         body: JSON.stringify({
           accountId,
           to: sanitizedPhone,
-          text: contentText,
+          text: contentText || null,
+          mediaUrl: mediaUrl || null,
+          mediaType: messageType || null,
+          filename: filename || null,
         }),
       });
 

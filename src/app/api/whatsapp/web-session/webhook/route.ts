@@ -340,7 +340,11 @@ async function handleConnectionStatus(
 async function handleInboundMessage(
   accountId: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  rawMsg: BaileysMessage & { resolvedPhoneJid?: string | null }
+  rawMsg: BaileysMessage & {
+    resolvedPhoneJid?: string | null;
+    mediaUrl?: string | null;
+    mediaType?: string | null;
+  }
 ) {
   const key = rawMsg.key
 
@@ -564,6 +568,7 @@ async function handleInboundMessage(
       sender_type: 'agent',
       content_type: dbContentType,
       content_text: contentText,
+      media_url: rawMsg.mediaUrl || null,
       message_id: messageId,
       status: 'sent',
       channel: 'whatsapp',
@@ -607,6 +612,7 @@ async function handleInboundMessage(
     sender_type: 'customer',
     content_type: dbContentType,
     content_text: contentText,
+    media_url: rawMsg.mediaUrl || null,
     message_id: messageId,
     status: 'delivered',
     channel: 'whatsapp',
@@ -697,6 +703,8 @@ async function handleInboundMessage(
         userId: configOwnerUserId,
         accessToken: decryptedAccessToken,
         channel: 'whatsapp',
+        mediaUrl: rawMsg.mediaUrl || null,
+        mediaType: rawMsg.mediaType || null,
       })
     } catch (err) {
       console.error('[web-session/webhook] AI agent dispatch failed:', err)
@@ -738,7 +746,14 @@ export async function POST(request: Request) {
     } else if (eventType === 'messages.upsert') {
       const rawMessage = body.message as BaileysMessage
       const resolvedPhoneJid = body.resolvedPhoneJid as string | null | undefined
-      await handleInboundMessage(accountId, { ...rawMessage, resolvedPhoneJid: resolvedPhoneJid ?? null })
+      const mediaUrl = body.mediaUrl as string | null | undefined
+      const mediaType = body.mediaType as string | null | undefined
+      await handleInboundMessage(accountId, {
+        ...rawMessage,
+        resolvedPhoneJid: resolvedPhoneJid ?? null,
+        mediaUrl: mediaUrl ?? null,
+        mediaType: mediaType ?? null,
+      })
     } else {
       console.log(`[web-session/webhook] Unhandled event type: ${eventType}`)
     }

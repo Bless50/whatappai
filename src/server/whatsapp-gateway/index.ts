@@ -5,7 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import dotenv from 'dotenv';
 import QRCode from 'qrcode';
-import { makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestWaWebVersion, type AnyMessageContent, USyncQuery, USyncUser } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestWaWebVersion, type AnyMessageContent, USyncQuery, USyncUser, downloadContentFromMessage } from '@whiskeysockets/baileys';
 import pino from 'pino';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
@@ -63,6 +63,104 @@ const sessions = new Map<string, SessionData>();
 // knownLidNumbers: tracks which numbers were seen as @lid JIDs (used as send fallback)
 const lidToPhoneJid = new Map<string, string>();
 const knownLidNumbers = new Set<string>(); // numbers that are LID-based, not real phone numbers
+
+// ============ BAILEYS DECODE & MEDIA HELPERS ============
+function unwrapBaileysMessage(m: any): any {
+  if (!m) return m;
+  if (m.ephemeralMessage?.message) return unwrapBaileysMessage(m.ephemeralMessage.message);
+  if (m.viewOnceMessage?.message) return unwrapBaileysMessage(m.viewOnceMessage.message);
+  if (m.viewOnceMessageV2?.message) return unwrapBaileysMessage(m.viewOnceMessageV2.message);
+  if (m.documentWithCaptionMessage?.message) return unwrapBaileysMessage(m.documentWithCaptionMessage.message);
+  if (m.deviceSentMessage?.message) return unwrapBaileysMessage(m.deviceSentMessage.message);
+  if (m.editedMessage?.message) return unwrapBaileysMessage(m.editedMessage.message);
+  if (m.protocolMessage?.editedMessage) return unwrapBaileysMessage(m.protocolMessage.editedMessage);
+  return m;
+}
+
+function getMimeType(type: string, _ext: string): string {
+  if (type === 'image') return 'image/jpeg';
+  if (type === 'audio') return 'audio/ogg';
+  if (type === 'video') return 'video/mp4';
+  return 'application/octet-stream';
+}
+
+async function downloadAndUploadMedia(accountId: string, msg: any): Promise<{ publicUrl: string; mimeType: string } | null> {
+  const unwrapped = unwrapBaileysMessage(msg.message);
+  if (!unwrapped) return null;
+
+  let mediaMessage: any = null;
+  let mediaType: 'image' | 'video' | 'audio' | 'document' | null = null;
+  let filename = 'file';
+  let extension = 'bin';
+
+  if (unwrapped.imageMessage) {
+    mediaMessage = unwrapped.imageMessage;
+    mediaType = 'image';
+    extension = 'jpg';
+  } else if (unwrapped.audioMessage) {
+    mediaMessage = unwrapped.audioMessage;
+    mediaType = 'audio';
+    extension = 'ogg';
+  } else if (unwrapped.videoMessage) {
+    mediaMessage = unwrapped.videoMessage;
+    mediaType = 'video';
+    extension = 'mp4';
+  } else if (unwrapped.documentMessage) {
+    mediaMessage = unwrapped.documentMessage;
+    mediaType = 'document';
+    filename = unwrapped.documentMessage.fileName || 'document';
+    const parts = filename.split('.');
+    extension = parts.length > 1 ? parts.pop()!.toLowerCase() : 'bin';
+  }
+
+  if (!mediaMessage || !mediaType) return null;
+
+  try {
+    console.log(`[Gateway] Downloading media content of type ${mediaType} for message ${msg.key.id}`);
+    const stream = await downloadContentFromMessage(mediaMessage, mediaType);
+    let buffer = Buffer.from([]);
+    for await (const chunk of stream) {
+      buffer = Buffer.concat([buffer, chunk]);
+    }
+
+    const mimeType = mediaMessage.mimetype || getMimeType(mediaType, extension);
+    
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !supabaseServiceKey) {
+      console.warn(`[Gateway] Supabase URL or Service Key not configured. Skipping media upload.`);
+      return null;
+    }
+
+    const safeBase = filename.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 40) || 'file';
+    const now = Date.now();
+    const storagePath = `account-${accountId}/${now}-${safeBase}.${extension}`;
+    const uploadUrl = `${supabaseUrl}/storage/v1/object/chat-media/${storagePath}`;
+
+    console.log(`[Gateway] Uploading downloaded media to Supabase: ${uploadUrl}`);
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${supabaseServiceKey}`,
+        'Content-Type': mimeType,
+      },
+      body: buffer,
+    });
+
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text();
+      console.error(`[Gateway] Supabase upload failed with status ${uploadRes.status}: ${errText}`);
+      return null;
+    }
+
+    const publicUrl = `${supabaseUrl}/storage/v1/object/public/chat-media/${storagePath}`;
+    console.log(`[Gateway] Uploaded successfully. Public URL: ${publicUrl}`);
+    return { publicUrl, mimeType };
+  } catch (err) {
+    console.error(`[Gateway] Error downloading/uploading media:`, err);
+    return null;
+  }
+}
 
 const app = express();
 app.use(cors());
@@ -418,6 +516,16 @@ async function initSession(accountId: string): Promise<SessionData> {
         }
       }
 
+      const mediaPayload: { mediaUrl?: string; mediaType?: string } = {};
+      const unwrapped = unwrapBaileysMessage(msg.message);
+      if (unwrapped && (unwrapped.imageMessage || unwrapped.audioMessage || unwrapped.videoMessage || unwrapped.documentMessage)) {
+        const mediaResult = await downloadAndUploadMedia(accountId, msg);
+        if (mediaResult) {
+          mediaPayload.mediaUrl = mediaResult.publicUrl;
+          mediaPayload.mediaType = mediaResult.mimeType;
+        }
+      }
+
       console.log(`[Gateway] Forwarding message ${msg.key.id} for account ${accountId} (remoteJid: ${msg.key.remoteJid}, fromMe: ${msg.key.fromMe}, senderPn: ${senderPn || 'none'})${resolvedPhoneJid ? `, resolvedPhone: ${resolvedPhoneJid}` : ''}`);
       // Send raw Baileys message object; Next.js frontend expects this exact format!
       // resolvedPhoneJid is set for @lid senders so the webhook can find the real phone number.
@@ -425,6 +533,7 @@ async function initSession(accountId: string): Promise<SessionData> {
         type: 'messages.upsert',
         message: msg,
         ...(resolvedPhoneJid ? { resolvedPhoneJid } : {}),
+        ...mediaPayload,
       });
     }
   });
@@ -633,9 +742,9 @@ app.post('/api/messages/presence', async (req, res) => {
 });
 
 app.post('/api/messages/send', async (req, res) => {
-  const { accountId, to, text, messageId } = req.body;
-  if (!accountId || !to || !text) {
-    res.status(400).json({ error: 'accountId, to, and text are required in body' });
+  const { accountId, to, text, messageId, mediaUrl, mediaType, filename } = req.body;
+  if (!accountId || !to || (!text && !mediaUrl)) {
+    res.status(400).json({ error: 'accountId, to, and either text or mediaUrl are required in body' });
     return;
   }
   const session = sessions.get(accountId);
@@ -659,7 +768,7 @@ app.post('/api/messages/send', async (req, res) => {
     //   5. Unknown number → assume regular phone, use number@s.whatsapp.net
     let targetJid: string;
     let resolvedPhoneJid = lidToPhoneJid.get(cleanNumber);
-
+ 
     // Strategy 2b: Try Baileys' runtime LID mapping if event-based map missed it
     if (!resolvedPhoneJid && knownLidNumbers.has(cleanNumber) && session.client) {
       try {
@@ -676,7 +785,7 @@ app.post('/api/messages/send', async (req, res) => {
         console.warn(`[Gateway] signalRepository LID lookup failed:`, resolveErr);
       }
     }
-
+ 
     if (to.includes('@')) {
       // Caller passed a full JID (e.g. number@lid or number@s.whatsapp.net) — use it directly
       targetJid = to.replace('@c.us', '@s.whatsapp.net');
@@ -695,7 +804,30 @@ app.post('/api/messages/send', async (req, res) => {
     
     console.log(`[Gateway] Sending message to JID: ${targetJid} for account ${accountId} (lidResolved: ${!!resolvedPhoneJid})`);
     
-    const content: AnyMessageContent = { text: text };
+    let content: AnyMessageContent;
+    if (mediaUrl && mediaType) {
+      if (mediaType === 'image') {
+        content = { image: { url: mediaUrl }, caption: text || undefined };
+      } else if (mediaType === 'audio') {
+        content = { audio: { url: mediaUrl }, mimetype: 'audio/mp4', ptt: true };
+      } else if (mediaType === 'video') {
+        content = { video: { url: mediaUrl }, caption: text || undefined };
+      } else if (mediaType === 'document') {
+        const parts = (filename || '').split('.');
+        const ext = parts.length > 1 ? parts.pop()!.toLowerCase() : '';
+        let mime = 'application/octet-stream';
+        if (ext === 'pdf') mime = 'application/pdf';
+        else if (ext === 'doc' || ext === 'docx') mime = 'application/msword';
+        else if (ext === 'xls' || ext === 'xlsx') mime = 'application/vnd.ms-excel';
+        else if (ext === 'png') mime = 'image/png';
+        else if (ext === 'jpg' || ext === 'jpeg') mime = 'image/jpeg';
+        content = { document: { url: mediaUrl }, mimetype: mime, fileName: filename || 'Document', caption: text || undefined };
+      } else {
+        content = { text: text || '' };
+      }
+    } else {
+      content = { text: text || '' };
+    }
     
     // If a custom messageId is provided, pass it to Baileys options
     const options = messageId ? { messageId } : undefined;

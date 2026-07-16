@@ -73,13 +73,27 @@ export async function executeAgent(
       } else {
         try {
           console.log(`[ai/engine] Downloading audio for transcription: ${input.mediaUrl}`)
-          const mediaId = input.mediaUrl.split('/').pop()
+          const isDirectUrl = input.mediaUrl.startsWith('http://') || input.mediaUrl.startsWith('https://')
+          const mediaId = isDirectUrl ? 'direct-' + Date.now() : input.mediaUrl.split('/').pop()
           if (mediaId) {
-            const mediaInfo = await getMediaUrl({ mediaId, accessToken: input.accessToken })
-            const { buffer, contentType } = await downloadMedia({
-              downloadUrl: mediaInfo.url,
-              accessToken: input.accessToken
-            })
+            let buffer: Buffer
+            let contentType: string
+
+            if (isDirectUrl) {
+              const res = await fetch(input.mediaUrl)
+              if (!res.ok) throw new Error(`Failed to fetch media directly: ${res.statusText}`)
+              const arrayBuffer = await res.arrayBuffer()
+              buffer = Buffer.from(arrayBuffer)
+              contentType = res.headers.get('content-type') || input.mediaType
+            } else {
+              const mediaInfo = await getMediaUrl({ mediaId, accessToken: input.accessToken })
+              const downloaded = await downloadMedia({
+                downloadUrl: mediaInfo.url,
+                accessToken: input.accessToken
+              })
+              buffer = downloaded.buffer
+              contentType = downloaded.contentType
+            }
 
             const transcription = await transcribeAudioWithGroq(
               buffer,
@@ -124,13 +138,28 @@ export async function executeAgent(
     if (input.mediaUrl && input.mediaType && input.mediaType.startsWith('image/')) {
       try {
         console.log(`[ai/engine] Downloading image for vision analysis: ${input.mediaUrl}`)
-        const mediaId = input.mediaUrl.split('/').pop()
+        const isDirectUrl = input.mediaUrl.startsWith('http://') || input.mediaUrl.startsWith('https://')
+        const mediaId = isDirectUrl ? 'direct-' + Date.now() : input.mediaUrl.split('/').pop()
         if (mediaId) {
-          const mediaInfo = await getMediaUrl({ mediaId, accessToken: input.accessToken })
-          const { buffer, contentType } = await downloadMedia({
-            downloadUrl: mediaInfo.url,
-            accessToken: input.accessToken
-          })
+          let buffer: Buffer
+          let contentType: string
+
+          if (isDirectUrl) {
+            const res = await fetch(input.mediaUrl)
+            if (!res.ok) throw new Error(`Failed to fetch media directly: ${res.statusText}`)
+            const arrayBuffer = await res.arrayBuffer()
+            buffer = Buffer.from(arrayBuffer)
+            contentType = res.headers.get('content-type') || input.mediaType
+          } else {
+            const mediaInfo = await getMediaUrl({ mediaId, accessToken: input.accessToken })
+            const downloaded = await downloadMedia({
+              downloadUrl: mediaInfo.url,
+              accessToken: input.accessToken
+            })
+            buffer = downloaded.buffer
+            contentType = downloaded.contentType
+          }
+
           inboundImageBase64 = buffer.toString('base64')
           inboundImageMimeType = contentType || input.mediaType
         }
@@ -272,8 +301,17 @@ export async function executeAgent(
       })
 
       // ============ 5. CALL LLM (with tool-use loop) ============
+      let activeModelName = agent.model_name
+      if (inboundImageBase64) {
+        if (activeModelName === 'deepseek/deepseek-v4-flash') {
+          activeModelName = 'deepseek/deepseek-v4-pro'
+        } else if (activeModelName.endsWith('-flash')) {
+          activeModelName = activeModelName.slice(0, -6) + '-pro'
+        }
+      }
+
       const modelConfig: ModelConfig = {
-        model: agent.model_name,
+        model: activeModelName,
         temperature: agent.temperature,
         max_tokens: agent.max_tokens,
         apiKey: decryptedKey,
@@ -816,7 +854,7 @@ async function transcribeAudioWithGroq(
   const formData = new FormData()
   const blob = new Blob([new Uint8Array(audioBuffer)], { type: mimeType })
   formData.append('file', blob, filename)
-  formData.append('model', 'whisper-large-v3')
+  formData.append('model', 'whisper-large-v3-turbo')
 
   const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
