@@ -26,8 +26,15 @@ import {
   sendTextMessage,
   sendTemplateMessage,
   sendMediaMessage,
+  sendInteractiveButtons,
+  sendInteractiveList,
   type MediaKind,
 } from '@/lib/whatsapp/meta-api';
+import {
+  validateInteractivePayload,
+  interactivePayloadPreviewText,
+  type InteractiveMessagePayload,
+} from '@/lib/whatsapp/interactive';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
 import { supabaseAdmin } from '@/lib/flows/admin-client';
 import {
@@ -43,6 +50,7 @@ export const MEDIA_KINDS = ['image', 'video', 'document', 'audio'] as const;
 export const VALID_MESSAGE_TYPES = [
   'text',
   'template',
+  'interactive',
   ...MEDIA_KINDS,
 ] as const;
 
@@ -74,6 +82,8 @@ export interface SendMessageParams {
   templateParams?: string[];
   /** Structured template params (header/body/buttons). */
   templateMessageParams?: unknown;
+  /** Structured payload for `messageType === 'interactive'`. */
+  interactivePayload?: InteractiveMessagePayload | null;
   replyToMessageId?: string | null;
 }
 
@@ -104,8 +114,10 @@ export function validateSendMessageParams(params: {
   contentText?: string | null;
   mediaUrl?: string | null;
   templateName?: string | null;
+  interactivePayload?: InteractiveMessagePayload | null;
 }): void {
-  const { messageType, contentText, mediaUrl, templateName } = params;
+  const { messageType, contentText, mediaUrl, templateName, interactivePayload } =
+    params;
 
   if (!messageType) {
     throw new SendMessageError('bad_request', 'message_type is required', 400);
@@ -135,6 +147,15 @@ export function validateSendMessageParams(params: {
       'template_name is required for template messages',
       400
     );
+  }
+
+  // Interactive: validate the full structured payload against Meta's
+  // limits up front so a bad payload 400s before we touch Meta.
+  if (messageType === 'interactive') {
+    const result = validateInteractivePayload(interactivePayload);
+    if (!result.ok) {
+      throw new SendMessageError('bad_request', result.error, 400);
+    }
   }
 
   if (isMediaKind && !mediaUrl) {
@@ -175,6 +196,7 @@ export async function sendMessageToConversation(
     templateLanguage,
     templateParams,
     templateMessageParams,
+    interactivePayload,
     replyToMessageId,
   } = params;
 
@@ -186,7 +208,13 @@ export async function sendMessageToConversation(
     );
   }
 
-  validateSendMessageParams({ messageType, contentText, mediaUrl, templateName });
+  validateSendMessageParams({
+    messageType,
+    contentText,
+    mediaUrl,
+    templateName,
+    interactivePayload,
+  });
 
   const isMediaKind = (MEDIA_KINDS as readonly string[]).includes(messageType);
 
@@ -294,6 +322,7 @@ export async function sendMessageToConversation(
           filename: filename || null,
         }),
       });
+
 
       if (!gatewayRes.ok) {
         const errData = await gatewayRes.json().catch(() => ({ error: 'Unknown gateway error' }));
@@ -447,6 +476,34 @@ export async function sendMessageToConversation(
         });
         return result.messageId;
       }
+      if (messageType === 'interactive') {
+        const p = interactivePayload!;
+        if (p.kind === 'buttons') {
+          const result = await sendInteractiveButtons({
+            phoneNumberId: config.phone_number_id,
+            accessToken,
+            to: phone,
+            bodyText: p.body,
+            headerText: p.header || undefined,
+            footerText: p.footer || undefined,
+            buttons: p.buttons,
+            contextMessageId,
+          });
+          return result.messageId;
+        }
+        const result = await sendInteractiveList({
+          phoneNumberId: config.phone_number_id,
+          accessToken,
+          to: phone,
+          bodyText: p.body,
+          buttonLabel: p.button_label,
+          headerText: p.header || undefined,
+          footerText: p.footer || undefined,
+          sections: p.sections,
+          contextMessageId,
+        });
+        return result.messageId;
+      }
       if (isMediaKind) {
         const result = await sendMediaMessage({
           phoneNumberId: config.phone_number_id,
@@ -517,15 +574,23 @@ export async function sendMessageToConversation(
 
     // Persist the sent message. Field names MUST match the messages
     // schema (see 001_initial_schema.sql).
+    // Interactive messages persist the body as content_text (so the
+    // conversation-list preview reads sensibly) plus the full structured
+    // payload so the thread can re-render the buttons / rows.
+    const interactiveBody =
+      messageType === 'interactive' ? interactivePayload!.body : null;
+
     const { data: messageRecord, error: msgError } = await db
       .from('messages')
       .insert({
         conversation_id: conversationId,
         sender_type: 'agent',
         content_type: messageType,
-        content_text: contentText || null,
+        content_text: interactiveBody ?? contentText ?? null,
         media_url: mediaUrl || null,
         template_name: templateName || null,
+        interactive_payload:
+          messageType === 'interactive' ? interactivePayload : null,
         message_id: waMessageId,
         status: 'sent',
         reply_to_message_id: replyToMessageId || null,
@@ -542,10 +607,15 @@ export async function sendMessageToConversation(
       );
     }
 
+    const lastMessageText =
+      messageType === 'interactive'
+        ? interactivePayloadPreviewText(interactivePayload!)
+        : contentText || `[${messageType}]`;
+
     await db
       .from('conversations')
       .update({
-        last_message_text: contentText || `[${messageType}]`,
+        last_message_text: lastMessageText,
         last_message_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
