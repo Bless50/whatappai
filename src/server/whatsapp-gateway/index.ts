@@ -123,7 +123,8 @@ async function downloadAndUploadMedia(accountId: string, msg: any): Promise<{ pu
       buffer = Buffer.concat([buffer, chunk]);
     }
 
-    const mimeType = mediaMessage.mimetype || getMimeType(mediaType, extension);
+    const rawMimeType = mediaMessage.mimetype || getMimeType(mediaType, extension);
+    const mimeType = rawMimeType.split(';')[0].trim();
     
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
