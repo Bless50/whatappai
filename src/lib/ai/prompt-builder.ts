@@ -248,7 +248,7 @@ async function buildConversationHistory(
     .from('messages')
     .select('sender_type, content_type, content_text, created_at')
     .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
     .limit(limit)
 
   if (error || !rows || rows.length === 0) return []
@@ -268,7 +268,7 @@ async function buildConversationHistory(
     messages.push({ role, content: text })
   }
 
-  return messages
+  return messages.reverse()
 }
 
 /**
