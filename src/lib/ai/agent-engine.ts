@@ -814,7 +814,7 @@ async function transcribeAudioWithGroq(
   apiKey: string
 ): Promise<string> {
   const formData = new FormData()
-  const blob = new Blob([audioBuffer], { type: mimeType })
+  const blob = new Blob([new Uint8Array(audioBuffer)], { type: mimeType })
   formData.append('file', blob, filename)
   formData.append('model', 'whisper-large-v3')
 
