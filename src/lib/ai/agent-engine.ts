@@ -168,6 +168,57 @@ export async function executeAgent(
       }
     }
 
+    const hasInboundImage = !!inboundImageBase64
+
+    // ============ DYNAMIC IMAGE DESCRIPTION FOR TEXT-ONLY MODELS ============
+    if (inboundImageBase64 && inboundImageMimeType) {
+      const activeModelName = agent.model_name
+      if (activeModelName.includes('deepseek')) {
+        console.log(`[ai/engine] Active model ${activeModelName} is text-only. Describing image via llama-3.2-11b-vision-instruct...`)
+        try {
+          const apiKey = agent.openrouter_api_key ?? agent.openrouter_key
+          if (apiKey) {
+            const decryptedKey = decrypt(apiKey)
+            const visionConfig: ModelConfig = {
+              model: 'meta-llama/llama-3.2-11b-vision-instruct',
+              temperature: 0.2,
+              max_tokens: 1000,
+              apiKey: decryptedKey,
+            }
+            
+            const visionMessages = [
+              {
+                role: 'user' as const,
+                content: [
+                  { type: 'text' as const, text: 'Describe the contents of this image in detail. Be precise and cover any readable text, objects, and visual layout.' },
+                  {
+                    type: 'image_url' as const,
+                    image_url: {
+                      url: `data:${inboundImageMimeType};base64,${inboundImageBase64}`
+                    }
+                  }
+                ]
+              }
+            ]
+            
+            const visionRes = await callModel(visionConfig, visionMessages)
+            const imageDescription = visionRes.content
+            if (imageDescription) {
+              console.log('[ai/engine] Vision analysis description:', imageDescription)
+              const originalText = input.messageText || ''
+              input.messageText = `${originalText}\n\n[Attached Image Description: ${imageDescription}]`.trim()
+              
+              // Clear these so we don't pass base64 payload to text-only DeepSeek
+              inboundImageBase64 = null
+              inboundImageMimeType = null
+            }
+          }
+        } catch (visionErr) {
+          console.error('[ai/engine] Vision analysis description failed:', visionErr)
+        }
+      }
+    }
+
     // ============ AUTO-PAUSE CHECK (SYSTEM LEVEL) ============
     const autoPauseEnabled = agent.auto_pause_enabled !== false // defaults to true
     if (autoPauseEnabled) {
@@ -302,7 +353,7 @@ export async function executeAgent(
 
       // ============ 5. CALL LLM (with tool-use loop) ============
       let activeModelName = agent.model_name
-      if (inboundImageBase64) {
+      if (hasInboundImage) {
         if (activeModelName === 'deepseek/deepseek-v4-flash') {
           activeModelName = 'deepseek/deepseek-v4-pro'
         } else if (activeModelName.endsWith('-flash')) {
