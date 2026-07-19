@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS public.products (
   account_id UUID NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
+  category TEXT,
   price NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
   image_url TEXT,
   sku TEXT,
