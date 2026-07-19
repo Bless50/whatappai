@@ -174,13 +174,13 @@ export async function executeAgent(
     if (inboundImageBase64 && inboundImageMimeType) {
       const activeModelName = agent.model_name
       if (activeModelName.includes('deepseek')) {
-        console.log(`[ai/engine] Active model ${activeModelName} is text-only. Describing image via gemini-3.5-flash...`)
+        console.log(`[ai/engine] Active model ${activeModelName} is text-only. Describing image via gemini-2.5-flash-lite...`)
         try {
           const apiKey = agent.openrouter_api_key ?? agent.openrouter_key
           if (apiKey) {
             const decryptedKey = decrypt(apiKey)
             const visionConfig: ModelConfig = {
-              model: 'google/gemini-3.5-flash',
+              model: 'google/gemini-2.5-flash-lite',
               temperature: 0.2,
               max_tokens: 1000,
               apiKey: decryptedKey,
@@ -351,6 +351,8 @@ export async function executeAgent(
         inboundImageMimeType,
         proactiveInstruction: input.proactiveInstruction,
       })
+      // ============ 5. CALL LLM (with tool-use loop) ============
+      const activeModelName = agent.model_name
 
       const modelConfig: ModelConfig = {
         model: activeModelName,
