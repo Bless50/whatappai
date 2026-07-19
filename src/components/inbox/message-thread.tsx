@@ -820,7 +820,7 @@ export function MessageThread({
     onMessagesLoaded([]);
     
     try {
-      const res = await fetch(`/api/v1/conversations/${conversation.id}/messages`, {
+      const res = await fetch(`/api/whatsapp/clear?conversationId=${conversation.id}`, {
         method: "DELETE"
       });
       if (!res.ok) {
