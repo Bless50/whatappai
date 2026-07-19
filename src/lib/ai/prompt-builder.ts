@@ -47,6 +47,8 @@ export interface PromptContext {
   maxContextTokens?: number
   inboundImageBase64?: string | null
   inboundImageMimeType?: string | null
+  /** Special instruction for proactive/cron-triggered AI wakeups */
+  proactiveInstruction?: string
 }
 
 /**
@@ -136,6 +138,14 @@ export async function buildPrompt(ctx: PromptContext): Promise<ChatMessage[]> {
     messages.push({
       role: 'user',
       content: ctx.inboundText,
+    })
+  }
+
+  // ============ 4. PROACTIVE SYSTEM TRIGGER ============
+  if (ctx.proactiveInstruction) {
+    messages.push({
+      role: 'system',
+      content: `[SYSTEM TRIGGER]: ${ctx.proactiveInstruction}`,
     })
   }
 

@@ -56,7 +56,8 @@ export type AISkillType =
   | 'book_appointment'
   | 'escalate'
   | 'update_contact'
-  | 'notify_owner';
+  | 'notify_owner'
+  | 'schedule_followup';
 
 export interface AIAgentSkill {
   id: string;
@@ -226,6 +227,8 @@ export interface AIDispatchInput {
   channel?: AIAgentChannel;
   mediaUrl?: string | null;
   mediaType?: string | null;
+  /** Special instruction for proactive/cron-triggered AI wakeups */
+  proactiveInstruction?: string;
 }
 
 export interface AIDispatchResult {

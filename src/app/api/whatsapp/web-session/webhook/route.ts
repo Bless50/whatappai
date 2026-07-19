@@ -344,7 +344,8 @@ async function handleInboundMessage(
     resolvedPhoneJid?: string | null;
     mediaUrl?: string | null;
     mediaType?: string | null;
-  }
+  },
+  isHistorySync: boolean = false
 ) {
   const key = rawMsg.key
 
@@ -645,73 +646,101 @@ async function handleInboundMessage(
   }
 
   // ============ FLOWS + AUTOMATIONS DISPATCH ============
-  const flowResult = await dispatchInboundToFlows({
-    accountId,
-    userId: configOwnerUserId,
-    contactId: contactRecord.id as string,
-    conversationId: conversation.id as string,
-    message: {
-      kind: 'text',
-      text: contentText ?? '',
-      meta_message_id: messageId,
-    },
-    isFirstInboundMessage,
+  if (!isHistorySync) {
+    const flowResult = await dispatchInboundToFlows({
+      accountId,
+      userId: configOwnerUserId,
+      contactId: contactRecord.id as string,
+      conversationId: conversation.id as string,
+      message: {
+        kind: 'text',
+        text: contentText ?? '',
+        meta_message_id: messageId,
+      },
+      isFirstInboundMessage,
+    })
+    const flowConsumed = flowResult.consumed
+
+    const inboundText = contentText ?? ''
+    const automationTriggers: (
+      | 'new_contact_created'
+      | 'first_inbound_message'
+      | 'new_message_received'
+      | 'keyword_match'
+    )[] = []
+
+    if (!flowConsumed) {
+      automationTriggers.push('new_message_received', 'keyword_match')
+    }
+    if (contactOutcome.wasCreated) automationTriggers.unshift('new_contact_created')
+    if (isFirstInboundMessage) automationTriggers.unshift('first_inbound_message')
+
+    for (const triggerType of automationTriggers) {
+      try {
+        await runAutomationsForTrigger({
+          accountId,
+          triggerType,
+          contactId: contactRecord.id as string,
+          context: {
+            message_text: inboundText,
+            conversation_id: conversation.id as string,
+          },
+        })
+      } catch (err) {
+        console.error('[web-session/webhook] automation dispatch failed:', err)
+      }
+    }
+
+    // ============ AI AGENT DISPATCH ============
+    if (!flowConsumed) {
+      const rawToken = configRow?.access_token || ''
+      const decryptedAccessToken = rawToken ? decrypt(rawToken) : ''
+
+      try {
+        await dispatchToAIAgent({
+          accountId,
+          conversationId: conversation.id as string,
+          contactId: contactRecord.id as string,
+          messageText: inboundText,
+          userId: configOwnerUserId,
+          accessToken: decryptedAccessToken,
+          channel: 'whatsapp',
+          mediaUrl: rawMsg.mediaUrl || null,
+          mediaType: rawMsg.mediaType || null,
+        })
+      } catch (err) {
+        console.error('[web-session/webhook] AI agent dispatch failed:', err)
+      }
+    }
+  }
+
+  if (isHistorySync) {
+    console.log(`[web-session/webhook] Synced historical message ${messageId} for account ${accountId}`)
+  } else {
+    console.log(`[web-session/webhook] Processed inbound message ${messageId} for account ${accountId}`)
+  }
+}
+
+// ============ HISTORY SYNC ============
+
+async function handleHistorySync(accountId: string, messages: BaileysMessage[]) {
+  console.log(`[web-session/webhook] Processing history sync of ${messages.length} messages for account ${accountId}`)
+  // Sort messages chronologically by timestamp
+  const sortedMessages = messages.sort((a, b) => {
+    const aTs = typeof a.messageTimestamp === 'number' ? a.messageTimestamp : parseInt(a.messageTimestamp as string, 10)
+    const bTs = typeof b.messageTimestamp === 'number' ? b.messageTimestamp : parseInt(b.messageTimestamp as string, 10)
+    return (aTs || 0) - (bTs || 0)
   })
-  const flowConsumed = flowResult.consumed
 
-  const inboundText = contentText ?? ''
-  const automationTriggers: (
-    | 'new_contact_created'
-    | 'first_inbound_message'
-    | 'new_message_received'
-    | 'keyword_match'
-  )[] = []
-
-  if (!flowConsumed) {
-    automationTriggers.push('new_message_received', 'keyword_match')
-  }
-  if (contactOutcome.wasCreated) automationTriggers.unshift('new_contact_created')
-  if (isFirstInboundMessage) automationTriggers.unshift('first_inbound_message')
-
-  for (const triggerType of automationTriggers) {
+  // We process them sequentially to ensure contacts and conversations are created in order
+  for (const rawMsg of sortedMessages) {
     try {
-      await runAutomationsForTrigger({
-        accountId,
-        triggerType,
-        contactId: contactRecord.id as string,
-        context: {
-          message_text: inboundText,
-          conversation_id: conversation.id as string,
-        },
-      })
+      await handleInboundMessage(accountId, rawMsg as any, true)
     } catch (err) {
-      console.error('[web-session/webhook] automation dispatch failed:', err)
+      console.error(`[web-session/webhook] Failed to sync historical message ${rawMsg.key?.id}:`, err)
     }
   }
-
-  // ============ AI AGENT DISPATCH ============
-  if (!flowConsumed) {
-    const rawToken = configRow?.access_token || ''
-    const decryptedAccessToken = rawToken ? decrypt(rawToken) : ''
-
-    try {
-      await dispatchToAIAgent({
-        accountId,
-        conversationId: conversation.id as string,
-        contactId: contactRecord.id as string,
-        messageText: inboundText,
-        userId: configOwnerUserId,
-        accessToken: decryptedAccessToken,
-        channel: 'whatsapp',
-        mediaUrl: rawMsg.mediaUrl || null,
-        mediaType: rawMsg.mediaType || null,
-      })
-    } catch (err) {
-      console.error('[web-session/webhook] AI agent dispatch failed:', err)
-    }
-  }
-
-  console.log(`[web-session/webhook] Processed inbound message ${messageId} for account ${accountId}`)
+  console.log(`[web-session/webhook] Finished processing history sync for account ${accountId}`)
 }
 
 // ============ POST HANDLER ============
@@ -743,6 +772,11 @@ export async function POST(request: Request) {
         body.status as string,
         body.qr as string | undefined
       )
+    } else if (eventType === 'messaging-history.set') {
+      const messages = body.messages as BaileysMessage[]
+      if (messages && messages.length > 0) {
+        await handleHistorySync(accountId, messages)
+      }
     } else if (eventType === 'messages.upsert') {
       const rawMessage = body.message as BaileysMessage
       const resolvedPhoneJid = body.resolvedPhoneJid as string | null | undefined
