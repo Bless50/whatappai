@@ -36,13 +36,15 @@ export async function POST(request: Request) {
 
     const messages: ChatMessage[] = rawMessages
       .filter(
-        (m: unknown): m is ChatMessage =>
-          !!m &&
-          typeof m === 'object' &&
-          ((m as ChatMessage).role === 'user' ||
-            (m as ChatMessage).role === 'assistant') &&
-          typeof (m as ChatMessage).content === 'string' &&
-          (m as ChatMessage).content.trim().length > 0,
+        (m: unknown): m is ChatMessage => {
+          if (!m || typeof m !== 'object') return false
+          const msg = m as ChatMessage
+          return (
+            (msg.role === 'user' || msg.role === 'assistant') &&
+            typeof msg.content === 'string' &&
+            msg.content.trim().length > 0
+          )
+        },
       )
       .slice(-MAX_TURNS)
 
