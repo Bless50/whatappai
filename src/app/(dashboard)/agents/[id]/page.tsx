@@ -96,6 +96,8 @@ const AVAILABLE_SKILLS = [
   { id: "update_contact", name: "Update Contact", desc: "Allow the AI to collect and update contact details (like email or company)." },
   { id: "escalate", name: "Escalate", desc: "Allow the AI to pause itself and notify the business owner when human help is needed." },
   { id: "notify_owner", name: "Notify Owner", desc: "Allow the AI to send collected customer information (name, phone, email, interest) to your WhatsApp number." },
+  { id: "schedule_followup", name: "Schedule Follow-up", desc: "Allow the AI to schedule future follow-up messages for customers." },
+  { id: "send_product", name: "Send Product Photo", desc: "Allow the AI to search the product inventory and send matching product images and pricing to WhatsApp." },
 ];
 
 // ============================================================
