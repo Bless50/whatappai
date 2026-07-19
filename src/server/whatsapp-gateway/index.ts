@@ -880,6 +880,57 @@ app.post('/api/messages/send', async (req, res) => {
   }
 });
 
+app.post('/api/messages/clear', async (req, res) => {
+  const { accountId, to } = req.body;
+  if (!accountId || !to) {
+    res.status(400).json({ error: 'accountId and to are required' });
+    return;
+  }
+  const session = sessions.get(accountId);
+  if (!session || session.status !== 'connected' || !session.client) {
+    res.status(400).json({ error: 'WhatsApp Web session is not connected for this account' });
+    return;
+  }
+  try {
+    const cleanNumber = to.replace(/\D/g, '').replace(/@.*$/, '');
+    let targetJid: string;
+    let resolvedPhoneJid = lidToPhoneJid.get(cleanNumber);
+ 
+    if (!resolvedPhoneJid && knownLidNumbers.has(cleanNumber) && session.client) {
+      try {
+        const repo = (session.client as any).signalRepository;
+        if (repo?.lidMapping?.getPNForLID) {
+          const pn = await repo.lidMapping.getPNForLID(`${cleanNumber}@lid`);
+          if (pn) {
+            resolvedPhoneJid = String(pn).includes('@') ? String(pn) : `${pn}@s.whatsapp.net`;
+            lidToPhoneJid.set(cleanNumber, resolvedPhoneJid);
+          }
+        }
+      } catch (resolveErr) {
+        console.warn(`[Gateway] signalRepository LID lookup failed:`, resolveErr);
+      }
+    }
+ 
+    if (to.includes('@')) {
+      targetJid = to.replace('@c.us', '@s.whatsapp.net');
+    } else if (resolvedPhoneJid) {
+      targetJid = resolvedPhoneJid.includes('@') ? resolvedPhoneJid : `${resolvedPhoneJid}@s.whatsapp.net`;
+    } else if (knownLidNumbers.has(cleanNumber)) {
+      targetJid = `${cleanNumber}@lid`;
+    } else {
+      targetJid = `${cleanNumber}@s.whatsapp.net`;
+    }
+
+    console.log(`[Gateway] Clearing chat for JID: ${targetJid}`);
+    await session.client.chatModify({ clear: 'all' }, targetJid, []);
+    res.json({ success: true });
+  } catch (err) {
+    const error = err as Error;
+    console.error(`[Gateway] Error clearing chat:`, error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 async function restoreSavedSessions() {
   try {
     const dirs = fs.readdirSync(sessionsDir).filter((file) => {

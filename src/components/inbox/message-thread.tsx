@@ -29,6 +29,7 @@ import {
   PanelRightClose,
   Bot,
   BotOff,
+  Trash2,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { useTranslations } from "next-intl";
@@ -809,6 +810,29 @@ export function MessageThread({
     [conversation, onNewMessage, onUpdateMessage],
   );
 
+  const handleClearChat = useCallback(async () => {
+    if (!conversation) return;
+    if (!window.confirm("Are you sure you want to clear this chat? This will remove all messages from the CRM and from your phone, but it will not delete the contact. This action cannot be undone.")) {
+      return;
+    }
+    
+    // Optimistic UI update
+    onMessagesLoaded([]);
+    
+    try {
+      const res = await fetch(`/api/v1/conversations/${conversation.id}/messages`, {
+        method: "DELETE"
+      });
+      if (!res.ok) {
+        throw new Error("Failed to clear chat");
+      }
+      toast.success("Chat cleared successfully");
+    } catch (err) {
+      console.error(err);
+      toast.error("An error occurred while clearing the chat.");
+    }
+  }, [conversation, onMessagesLoaded]);
+
   // Build a quick id → Message map so reply quotes can be rendered without
   // an extra fetch — the thread already holds the full conversation.
   const messagesById = useMemo(() => {
@@ -1182,6 +1206,27 @@ export function MessageThread({
                   </DropdownMenuItem>
                 </>
               )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* More Options */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className="inline-flex items-center justify-center h-7 px-2 text-xs rounded-md text-muted-foreground hover:bg-muted"
+              title="More options"
+            >
+              <Trash2 className="h-3 w-3" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="border-border bg-popover"
+            >
+              <DropdownMenuItem
+                onClick={handleClearChat}
+                className="text-sm text-destructive focus:text-destructive"
+              >
+                {t("clearChat") || "Clear Chat"}
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
