@@ -384,11 +384,62 @@ export async function executeAgent(
           break
         }
 
-        // If this is the last iteration, break to prevent infinite loops
+        // If this is the last iteration, execute the final tool calls and force a final text reply.
         if (iteration === MAX_TOOL_ITERATIONS) {
           console.warn(
-            `[ai/engine] Agent ${agent.id} hit max tool iterations (${MAX_TOOL_ITERATIONS})`,
+            `[ai/engine] Agent ${agent.id} hit max tool iterations (${MAX_TOOL_ITERATIONS}). Forcing final text response.`,
           )
+
+          // 1. Add assistant's tool-call message to history
+          currentMessages.push({
+            role: 'assistant',
+            content: response.content,
+            tool_calls: response.tool_calls,
+          })
+
+          // 2. Execute each final tool call and add results to the context
+          const skillContext: SkillContext = {
+            accountId: input.accountId,
+            contactId: input.contactId,
+            conversationId: input.conversationId,
+            agentId: agent.id,
+          }
+
+          for (const toolCall of response.tool_calls) {
+            const skillType = toolCall.function.name
+            const def = getSkillDefinition(skillType)
+
+            let resultText: string
+            if (!def) {
+              resultText = `Error: Unknown tool "${skillType}"`
+            } else {
+              try {
+                const params = JSON.parse(toolCall.function.arguments)
+                const result = await def.execute(params, skillContext)
+                resultText = result.data
+              } catch (err) {
+                resultText = `Error executing ${skillType}: ${err instanceof Error ? err.message : String(err)}`
+              }
+            }
+
+            currentMessages.push({
+              role: 'tool',
+              content: resultText,
+              tool_call_id: toolCall.id,
+              name: skillType,
+            })
+          }
+
+          // 3. Make one final call to the model forcing it to write a text reply using the results
+          response = await callModel(
+            modelConfig,
+            currentMessages,
+            undefined, // Force NO tools on the final pass
+          )
+
+          totalPromptTokens += response.usage.prompt_tokens
+          totalCompletionTokens += response.usage.completion_tokens
+          totalCost += response.cost_usd
           break
         }
 
