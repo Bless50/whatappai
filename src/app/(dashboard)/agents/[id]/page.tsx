@@ -39,6 +39,7 @@ interface AgentDetail {
   description: string | null;
   is_active: boolean;
   system_prompt: string;
+  vision_prompt: string | null;
   prompt_personality: string | null;
   prompt_goal: string | null;
   prompt_general_info: string | null;
@@ -341,6 +342,7 @@ export default function AgentConfigPage() {
   const [isActive, setIsActive] = useState(false);
   const [approvalMode, setApprovalMode] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState("");
+  const [visionPrompt, setVisionPrompt] = useState("");
   const [promptPersonality, setPromptPersonality] = useState("");
   const [promptGoal, setPromptGoal] = useState("");
   const [promptGeneralInfo, setPromptGeneralInfo] = useState("");
@@ -372,6 +374,7 @@ export default function AgentConfigPage() {
       setDescription(a.description ?? "");
       setIsActive(a.is_active);
       setSystemPrompt(a.system_prompt);
+      setVisionPrompt(a.vision_prompt ?? "");
       setPromptPersonality(a.prompt_personality ?? "");
       setPromptGoal(a.prompt_goal ?? "");
       setPromptGeneralInfo(a.prompt_general_info ?? "");
@@ -443,6 +446,7 @@ export default function AgentConfigPage() {
         description: description || null,
         is_active: isActive,
         system_prompt: systemPrompt,
+        vision_prompt: visionPrompt,
         prompt_personality: promptPersonality,
         prompt_goal: promptGoal,
         prompt_general_info: promptGeneralInfo,
@@ -768,6 +772,25 @@ export default function AgentConfigPage() {
                   rows={6}
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary"
                   placeholder={`Example:\n- Teeth cleaning: ₦15,000\n- Dental checkup: ₦10,000\n- Working hours: Mon-Fri 9am-5pm\n- Address: 123 Victoria Island, Lagos`}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-4 pt-4 border-t">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">
+                  Vision Model Instructions (Optional)
+                </label>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  When a customer sends an image, the Vision AI describes it before passing it to the main agent. 
+                  Tell the Vision AI what to look for (e.g. "Extract the color, pattern, and product type so we can check inventory").
+                </p>
+                <textarea
+                  value={visionPrompt}
+                  onChange={(e) => setVisionPrompt(e.target.value)}
+                  rows={3}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder="Example: Describe the product in the image exactly, focusing on color and brand, ignoring the background."
                 />
               </div>
             </div>

@@ -83,7 +83,7 @@ export async function PATCH(
 
     // Build update object from allowed fields only
     const allowedFields = [
-      'name', 'description', 'avatar_url', 'is_active', 'system_prompt',
+      'name', 'description', 'avatar_url', 'is_active', 'system_prompt', 'vision_prompt',
       'prompt_personality', 'prompt_goal', 'prompt_general_info',
       'model_name', 'temperature', 'max_tokens', 'channels',
       'takeover_mode', 'takeover_timeout_minutes', 'approval_mode',
@@ -114,7 +114,7 @@ export async function PATCH(
       .update(updates)
       .eq('id', id)
       .select(
-        'id, account_id, name, description, is_active, system_prompt, ' +
+        'id, account_id, name, description, is_active, system_prompt, vision_prompt, ' +
         'prompt_personality, prompt_goal, prompt_general_info, ' +
         'model_name, temperature, max_tokens, channels, takeover_mode, ' +
         'takeover_timeout_minutes, approval_mode, response_delay_seconds, ' +
@@ -143,7 +143,7 @@ export async function PATCH(
           .update(retryUpdates)
           .eq('id', id)
           .select(
-            'id, account_id, name, description, is_active, system_prompt, ' +
+            'id, account_id, name, description, is_active, system_prompt, vision_prompt, ' +
             'prompt_personality, prompt_goal, prompt_general_info, ' +
             'model_name, temperature, max_tokens, channels, takeover_mode, ' +
             'takeover_timeout_minutes, updated_at',

@@ -190,7 +190,12 @@ export async function executeAgent(
               {
                 role: 'user' as const,
                 content: [
-                  { type: 'text' as const, text: 'Describe the contents of this image in detail. Be precise and cover any readable text, objects, and visual layout.' },
+                  { 
+                    type: 'text' as const, 
+                    text: agent.vision_prompt 
+                      ? `${agent.vision_prompt}\n\nContext: The user sent this image with the following message: "${input.messageText || '(no text)'}".`
+                      : 'Describe the contents of this image in detail. Be precise and cover any readable text, objects, and visual layout.' 
+                  },
                   {
                     type: 'image_url' as const,
                     image_url: {

@@ -41,7 +41,7 @@ export async function GET(request: Request) {
       .from('ai_agents')
       .select(
         'id, account_id, name, description, avatar_url, is_active, ' +
-        'system_prompt, prompt_personality, prompt_goal, prompt_general_info, model_name, temperature, max_tokens, channels, ' +
+        'system_prompt, vision_prompt, prompt_personality, prompt_goal, prompt_general_info, model_name, temperature, max_tokens, channels, ' +
         'takeover_mode, takeover_timeout_minutes, approval_mode, response_delay_seconds, provider, ' +
         'booking_link, created_at, updated_at',
       )
@@ -59,7 +59,7 @@ export async function GET(request: Request) {
           .from('ai_agents')
           .select(
             'id, account_id, name, description, avatar_url, is_active, ' +
-            'system_prompt, prompt_personality, prompt_goal, prompt_general_info, model_name, temperature, max_tokens, channels, ' +
+            'system_prompt, vision_prompt, prompt_personality, prompt_goal, prompt_general_info, model_name, temperature, max_tokens, channels, ' +
             'takeover_mode, takeover_timeout_minutes, provider, ' +
             'booking_link, created_at, updated_at',
           )
@@ -106,6 +106,7 @@ export async function POST(request: Request) {
       name,
       description,
       system_prompt,
+      vision_prompt,
       model_name,
       temperature,
       max_tokens,
@@ -137,6 +138,7 @@ export async function POST(request: Request) {
       name,
       description: description ?? null,
       system_prompt: system_prompt ?? 'You are a helpful AI assistant for this business. Be friendly, professional, and concise.',
+      vision_prompt: vision_prompt ?? null,
       prompt_personality: prompt_personality ?? null,
       prompt_goal: prompt_goal ?? null,
       prompt_general_info: prompt_general_info ?? null,
@@ -156,7 +158,7 @@ export async function POST(request: Request) {
       .from('ai_agents')
       .insert(insertData)
       .select(
-        'id, account_id, name, description, is_active, system_prompt, ' +
+        'id, account_id, name, description, is_active, system_prompt, vision_prompt, ' +
         'prompt_personality, prompt_goal, prompt_general_info, ' +
         'model_name, temperature, max_tokens, channels, takeover_mode, ' +
         'takeover_timeout_minutes, approval_mode, response_delay_seconds, created_at',

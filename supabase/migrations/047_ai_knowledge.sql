@@ -29,6 +29,7 @@
 --
 -- Idempotent — safe to run multiple times.
 -- ============================================================
+SET maintenance_work_mem = '128MB';
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -107,6 +108,14 @@ CREATE TABLE IF NOT EXISTS ai_knowledge_chunks (
   embedding    vector(1536),
   created_at   timestamptz NOT NULL DEFAULT now()
 );
+
+-- Fix schema conflict: 024 created ai_knowledge_chunks without fts, 
+-- and 030 failed to add it due to IF NOT EXISTS.
+ALTER TABLE public.ai_knowledge_chunks
+  ADD COLUMN IF NOT EXISTS document_id uuid REFERENCES public.ai_knowledge_documents(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS account_id uuid REFERENCES public.accounts(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS chunk_index integer NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS fts tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED;
 
 CREATE INDEX IF NOT EXISTS ai_knowledge_chunks_account_id_idx
   ON ai_knowledge_chunks (account_id);
