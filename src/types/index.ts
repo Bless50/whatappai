@@ -190,7 +190,7 @@ export interface Conversation {
 // Notifications (migration 027)
 // ============================================================
 
-export type NotificationType = 'conversation_assigned';
+export type NotificationType = 'conversation_assigned' | 'agent_escalation' | 'notify_owner';
 
 export interface Notification {
   id: string;

@@ -174,13 +174,13 @@ export async function executeAgent(
     if (inboundImageBase64 && inboundImageMimeType) {
       const activeModelName = agent.model_name
       if (activeModelName.includes('deepseek')) {
-        console.log(`[ai/engine] Active model ${activeModelName} is text-only. Describing image via llama-3.2-11b-vision-instruct...`)
+        console.log(`[ai/engine] Active model ${activeModelName} is text-only. Describing image via llama-3.2-11b-vision-instruct:free...`)
         try {
           const apiKey = agent.openrouter_api_key ?? agent.openrouter_key
           if (apiKey) {
             const decryptedKey = decrypt(apiKey)
             const visionConfig: ModelConfig = {
-              model: 'meta-llama/llama-3.2-11b-vision-instruct',
+              model: 'meta-llama/llama-3.2-11b-vision-instruct:free',
               temperature: 0.2,
               max_tokens: 1000,
               apiKey: decryptedKey,

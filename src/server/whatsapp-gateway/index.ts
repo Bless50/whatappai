@@ -409,22 +409,53 @@ async function initSession(accountId: string): Promise<SessionData> {
     }
   });
 
-  // Capture LID mappings from the initial full history sync that fires on connect
-  sock.ev.on('messaging-history.set' as any, ({ contacts }: { contacts: any[] }) => {
-    if (!contacts?.length) return;
-    let mapped = 0;
-    for (const contact of contacts) {
-      if (contact.lid && contact.id) {
-        const lidNumber = contact.lid.split('@')[0];
-        const phoneJid = contact.id.endsWith('@s.whatsapp.net')
-          ? contact.id
-          : `${contact.id}@s.whatsapp.net`;
-        lidToPhoneJid.set(lidNumber, phoneJid);
-        knownLidNumbers.add(lidNumber);
-        mapped++;
+  // Capture historical messages and LID mappings from the initial full history sync that fires on connect
+  sock.ev.on('messaging-history.set' as any, async (payload: { chats?: any[], contacts?: any[], messages?: any[], isLatest?: boolean }) => {
+    const { contacts, messages } = payload;
+    
+    // 1. Process contacts for LID mapping
+    if (contacts?.length) {
+      let mapped = 0;
+      for (const contact of contacts) {
+        if (contact.lid && contact.id) {
+          const lidNumber = contact.lid.split('@')[0];
+          const phoneJid = contact.id.endsWith('@s.whatsapp.net')
+            ? contact.id
+            : `${contact.id}@s.whatsapp.net`;
+          lidToPhoneJid.set(lidNumber, phoneJid);
+          knownLidNumbers.add(lidNumber);
+          mapped++;
+        }
+      }
+      if (mapped > 0) console.log(`[Gateway] LID mappings from history-sync: ${mapped} contacts mapped`);
+    }
+
+    // 2. Process historical messages (limit to last 30 days)
+    if (messages?.length) {
+      const thirtyDaysAgo = Math.floor(Date.now() / 1000) - (30 * 24 * 60 * 60);
+      
+      const recentHistoricalMessages = messages.filter(msg => {
+        // Skip status broadcast
+        if (msg.key?.remoteJid === 'status@broadcast') return false;
+        
+        // Skip group messages (we only want DMs per requirement)
+        if (msg.key?.remoteJid?.endsWith('@g.us')) return false;
+
+        const ts = typeof msg.messageTimestamp === 'number' 
+          ? msg.messageTimestamp 
+          : parseInt(msg.messageTimestamp as string, 10);
+        
+        return ts >= thirtyDaysAgo;
+      });
+
+      if (recentHistoricalMessages.length > 0) {
+        console.log(`[Gateway] Forwarding ${recentHistoricalMessages.length} historical messages (out of ${messages.length} total) from history-sync to webhook.`);
+        await notifyNextJs(accountId, { 
+          type: 'messaging-history.set', 
+          messages: recentHistoricalMessages 
+        });
       }
     }
-    if (mapped > 0) console.log(`[Gateway] LID mappings from history-sync: ${mapped} contacts mapped`);
   });
 
   // Capture LID updates that arrive after the initial sync

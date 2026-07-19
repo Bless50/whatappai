@@ -82,6 +82,25 @@ export const escalateSkill: SkillDefinition = {
         status: 'delivered',
       })
 
+      // Notify account owners/admins via the notifications dashboard
+      const { data: members } = await db
+        .from('profiles')
+        .select('user_id')
+        .eq('account_id', context.accountId)
+        .in('role', ['owner', 'admin'])
+
+      if (members && members.length > 0) {
+        const notifications = members.map((m) => ({
+          account_id: context.accountId,
+          user_id: m.user_id,
+          type: 'agent_escalation',
+          conversation_id: context.conversationId,
+          title: 'AI Agent Escalation',
+          body: reason,
+        }))
+        await db.from('notifications').insert(notifications)
+      }
+
       return {
         success: true,
         data:

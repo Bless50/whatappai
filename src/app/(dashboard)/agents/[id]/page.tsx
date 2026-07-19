@@ -552,13 +552,13 @@ export default function AgentConfigPage() {
       </div>
 
       {/* ============ TABS ============ */}
-      <div className="mt-6 flex gap-1 rounded-lg border bg-muted/30 p-1">
+      <div className="mt-6 flex overflow-x-auto gap-1 rounded-lg border bg-muted/30 p-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         {TABS.map((tab) => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
             className={cn(
-              "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-all",
+              "flex shrink-0 whitespace-nowrap items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-all",
               activeTab === tab.key
                 ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted/50",

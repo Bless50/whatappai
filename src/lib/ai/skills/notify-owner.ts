@@ -94,6 +94,25 @@ export const notifyOwnerSkill: SkillDefinition = {
         status: 'delivered',
       })
 
+      // Notify account owners/admins via the notifications dashboard
+      const { data: members } = await db
+        .from('profiles')
+        .select('user_id')
+        .eq('account_id', context.accountId)
+        .in('role', ['owner', 'admin'])
+
+      if (members && members.length > 0) {
+        const notifications = members.map((m) => ({
+          account_id: context.accountId,
+          user_id: m.user_id,
+          type: 'notify_owner',
+          conversation_id: context.conversationId,
+          title: 'New Lead Information',
+          body: `Lead info captured for ${customerName}`,
+        }))
+        await db.from('notifications').insert(notifications)
+      }
+
       // ============ 3. LOOK UP SKILL CONFIG FOR NOTIFY PHONE ============
       const { data: skillRow } = await db
         .from('ai_agent_skills')
