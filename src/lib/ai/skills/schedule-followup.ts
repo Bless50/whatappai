@@ -71,14 +71,24 @@ export const scheduleFollowupSkill: SkillDefinition = {
         status: 'pending',
       })
 
-      // We also log a quiet message in the chat history for the admin
-      await db.from('messages').insert({
-        conversation_id: context.conversationId,
-        sender_type: 'bot',
-        content_type: 'text',
-        content_text: `⏱️ AI scheduled a follow-up in ${delayHours} hours: "${taskDescription}"`,
-        status: 'delivered',
-      })
+      // Notify account owners/admins via the notifications dashboard
+      const { data: members } = await db
+        .from('profiles')
+        .select('user_id')
+        .eq('account_id', context.accountId)
+        .in('role', ['owner', 'admin'])
+
+      if (members && members.length > 0) {
+        const notifications = members.map((m) => ({
+          account_id: context.accountId,
+          user_id: m.user_id,
+          type: 'notify_owner',
+          conversation_id: context.conversationId,
+          title: 'AI Follow-up Scheduled',
+          body: `⏱️ AI scheduled a follow-up in ${delayHours} hours for the customer.\n\nTask: "${taskDescription}"`,
+        }))
+        await db.from('notifications').insert(notifications)
+      }
 
       return {
         success: true,

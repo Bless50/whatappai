@@ -812,26 +812,26 @@ export function MessageThread({
 
   const handleClearChat = useCallback(async () => {
     if (!conversation) return;
-    if (!window.confirm("Are you sure you want to clear this chat? This will remove all messages from the CRM and from your phone, but it will not delete the contact. This action cannot be undone.")) {
+    if (!window.confirm("Are you sure you want to delete this chat? This will remove the conversation from the CRM and clear it on your phone, but it will not delete the contact. This action cannot be undone.")) {
       return;
     }
     
-    // Optimistic UI update
-    onMessagesLoaded([]);
+    // Optimistic UI update - navigate back to conversation list
+    onBack?.();
     
     try {
       const res = await fetch(`/api/whatsapp/clear?conversationId=${conversation.id}`, {
         method: "DELETE"
       });
       if (!res.ok) {
-        throw new Error("Failed to clear chat");
+        throw new Error("Failed to delete chat");
       }
-      toast.success("Chat cleared successfully");
+      toast.success("Chat deleted successfully");
     } catch (err) {
       console.error(err);
-      toast.error("An error occurred while clearing the chat.");
+      toast.error("An error occurred while deleting the chat.");
     }
-  }, [conversation, onMessagesLoaded]);
+  }, [conversation, onBack]);
 
   // Build a quick id → Message map so reply quotes can be rendered without
   // an extra fetch — the thread already holds the full conversation.
@@ -1225,7 +1225,7 @@ export function MessageThread({
                 onClick={handleClearChat}
                 className="text-sm text-destructive focus:text-destructive"
               >
-                {t("clearChat") || "Clear Chat"}
+                {t("deleteChat") || "Delete Chat"}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

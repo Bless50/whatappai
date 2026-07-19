@@ -85,15 +85,6 @@ export const notifyOwnerSkill: SkillDefinition = {
 
       const notificationText = lines.join('\n')
 
-      // ============ 2. LOG IN THE CONVERSATION (always) ============
-      await db.from('messages').insert({
-        conversation_id: context.conversationId,
-        sender_type: 'bot',
-        content_type: 'text',
-        content_text: `📋 Lead info captured:\n${notificationText}`,
-        status: 'delivered',
-      })
-
       // Notify account owners/admins via the notifications dashboard
       const { data: members } = await db
         .from('profiles')
@@ -107,8 +98,8 @@ export const notifyOwnerSkill: SkillDefinition = {
           user_id: m.user_id,
           type: 'notify_owner',
           conversation_id: context.conversationId,
-          title: 'New Lead Information',
-          body: `Lead info captured for ${customerName}`,
+          title: `New Lead: ${customerName}`,
+          body: notificationText,
         }))
         await db.from('notifications').insert(notifications)
       }

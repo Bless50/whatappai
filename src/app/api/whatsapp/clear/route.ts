@@ -68,13 +68,13 @@ export async function DELETE(request: Request) {
     }
 
     const { error } = await supabase
-      .from('messages')
+      .from('conversations')
       .delete()
-      .eq('conversation_id', conversationId);
+      .eq('id', conversationId);
 
     if (error) {
       console.error('[api/whatsapp/clear] delete error:', error);
-      return NextResponse.json({ error: 'Failed to delete messages' }, { status: 500 })
+      return NextResponse.json({ error: 'Failed to delete conversation' }, { status: 500 })
     }
 
     return NextResponse.json({ success: true }, { status: 200 })

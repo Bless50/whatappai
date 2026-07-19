@@ -71,16 +71,7 @@ export const escalateSkill: SkillDefinition = {
         })
         .eq('id', context.conversationId)
 
-      // Insert a system-level note so the human agent sees the reason.
-      // We use sender_type 'bot' with a prefixed message to make it
-      // visible in the inbox conversation thread.
-      await db.from('messages').insert({
-        conversation_id: context.conversationId,
-        sender_type: 'bot',
-        content_type: 'text',
-        content_text: `⚠️ AI Escalation: ${reason}`,
-        status: 'delivered',
-      })
+
 
       // Notify account owners/admins via the notifications dashboard
       const { data: members } = await db

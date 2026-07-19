@@ -248,7 +248,7 @@ export default function NotificationsPage() {
                       )}
                     </div>
                     {n.body && (
-                      <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                      <p className="mt-1.5 whitespace-pre-wrap text-xs text-muted-foreground leading-relaxed">
                         {n.body}
                       </p>
                     )}
