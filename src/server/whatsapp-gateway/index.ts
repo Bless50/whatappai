@@ -297,7 +297,7 @@ async function initSession(accountId: string): Promise<SessionData> {
       
       if (shouldReconnect) {
         sessionData.retryCount = (sessionData.retryCount || 0) + 1;
-        const maxRetries = 5;
+        const maxRetries = 30; // Attempt reconnection for ~30 minutes before giving up
         
         if (sessionData.retryCount > maxRetries) {
           console.warn(`[Gateway] Max reconnect attempts (${maxRetries}) reached for account ${accountId}. Stopping automatic reconnection.`);
