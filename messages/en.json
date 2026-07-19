@@ -38,7 +38,10 @@
     "defaultAvatar": "Avatar",
     "menuProfile": "Profile",
     "menuSettings": "Settings",
-    "menuSignOut": "Sign out"
+    "menuSignOut": "Sign out",
+    "knowledgeBases": "Knowledge Base",
+    "integrations": "Integrations",
+    "products": "Products"
   },
   "Header": {
     "dashboard": "Dashboard",
