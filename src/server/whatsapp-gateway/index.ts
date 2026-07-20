@@ -753,12 +753,29 @@ app.post('/api/messages/presence', async (req, res) => {
     let targetJid: string;
     const resolvedPhoneJid = lidToPhoneJid.get(cleanNumber);
 
+    // Strategy 2b: Try Baileys' runtime LID mapping if event-based map missed it (or after restart)
+    if (!knownLidNumbers.has(cleanNumber) && session.client) {
+      try {
+        const repo = (session.client as any).signalRepository;
+        if (repo?.lidMapping?.getPNForLID) {
+          const pn = await repo.lidMapping.getPNForLID(`${cleanNumber}@lid`);
+          if (pn) {
+            knownLidNumbers.add(cleanNumber);
+            const resolvedPhone = String(pn).includes('@') ? String(pn) : `${pn}@s.whatsapp.net`;
+            lidToPhoneJid.set(cleanNumber, resolvedPhone);
+          }
+        }
+      } catch (resolveErr) {
+        console.warn(`[Gateway] signalRepository LID lookup failed:`, resolveErr);
+      }
+    }
+
     if (to.includes('@')) {
       targetJid = to.replace('@c.us', '@s.whatsapp.net');
-    } else if (resolvedPhoneJid) {
-      targetJid = resolvedPhoneJid.includes('@') ? resolvedPhoneJid : `${resolvedPhoneJid}@s.whatsapp.net`;
     } else if (knownLidNumbers.has(cleanNumber)) {
       targetJid = `${cleanNumber}@lid`;
+    } else if (resolvedPhoneJid) {
+      targetJid = resolvedPhoneJid.includes('@') ? resolvedPhoneJid : `${resolvedPhoneJid}@s.whatsapp.net`;
     } else {
       targetJid = `${cleanNumber}@s.whatsapp.net`;
     }
@@ -801,16 +818,17 @@ app.post('/api/messages/send', async (req, res) => {
     let targetJid: string;
     let resolvedPhoneJid = lidToPhoneJid.get(cleanNumber);
  
-    // Strategy 2b: Try Baileys' runtime LID mapping if event-based map missed it
-    if (!resolvedPhoneJid && knownLidNumbers.has(cleanNumber) && session.client) {
+    // Strategy 2b: Try Baileys' runtime LID mapping if event-based map missed it (or after restart)
+    if (!knownLidNumbers.has(cleanNumber) && session.client) {
       try {
         const repo = (session.client as any).signalRepository;
         if (repo?.lidMapping?.getPNForLID) {
           const pn = await repo.lidMapping.getPNForLID(`${cleanNumber}@lid`);
           if (pn) {
-            resolvedPhoneJid = String(pn).includes('@') ? String(pn) : `${pn}@s.whatsapp.net`;
-            lidToPhoneJid.set(cleanNumber, resolvedPhoneJid);
-            console.log(`[Gateway] LID resolved via signalRepository: ${cleanNumber} → ${resolvedPhoneJid}`);
+            knownLidNumbers.add(cleanNumber);
+            const resolvedPhone = String(pn).includes('@') ? String(pn) : `${pn}@s.whatsapp.net`;
+            lidToPhoneJid.set(cleanNumber, resolvedPhone);
+            console.log(`[Gateway] LID discovered via signalRepository on send: ${cleanNumber} → ${resolvedPhone}`);
           }
         }
       } catch (resolveErr) {
@@ -821,14 +839,15 @@ app.post('/api/messages/send', async (req, res) => {
     if (to.includes('@')) {
       // Caller passed a full JID (e.g. number@lid or number@s.whatsapp.net) — use it directly
       targetJid = to.replace('@c.us', '@s.whatsapp.net');
-    } else if (resolvedPhoneJid) {
-      // We have a confirmed real phone JID from the mapping
-      targetJid = resolvedPhoneJid.includes('@') ? resolvedPhoneJid : `${resolvedPhoneJid}@s.whatsapp.net`;
-      console.log(`[Gateway] Resolved LID ${cleanNumber} → ${targetJid}`);
     } else if (knownLidNumbers.has(cleanNumber)) {
       // ✅ Baileys docs: send to @lid directly — Baileys resolves it internally
       targetJid = `${cleanNumber}@lid`;
       console.log(`[Gateway] Known LID, sending to @lid JID directly: ${targetJid}`);
+    } else if (resolvedPhoneJid) {
+      // We have a confirmed real phone JID from the mapping, but it wasn't a LID? 
+      // (This shouldn't really happen since all lidToPhoneJid entries are LIDs, but just in case)
+      targetJid = resolvedPhoneJid.includes('@') ? resolvedPhoneJid : `${resolvedPhoneJid}@s.whatsapp.net`;
+      console.log(`[Gateway] Resolved phone JID: ${cleanNumber} → ${targetJid}`);
     } else {
       // Regular phone number
       targetJid = `${cleanNumber}@s.whatsapp.net`;
@@ -896,14 +915,15 @@ app.post('/api/messages/clear', async (req, res) => {
     let targetJid: string;
     let resolvedPhoneJid = lidToPhoneJid.get(cleanNumber);
  
-    if (!resolvedPhoneJid && knownLidNumbers.has(cleanNumber) && session.client) {
+    if (!knownLidNumbers.has(cleanNumber) && session.client) {
       try {
         const repo = (session.client as any).signalRepository;
         if (repo?.lidMapping?.getPNForLID) {
           const pn = await repo.lidMapping.getPNForLID(`${cleanNumber}@lid`);
           if (pn) {
-            resolvedPhoneJid = String(pn).includes('@') ? String(pn) : `${pn}@s.whatsapp.net`;
-            lidToPhoneJid.set(cleanNumber, resolvedPhoneJid);
+            knownLidNumbers.add(cleanNumber);
+            const resolvedPhone = String(pn).includes('@') ? String(pn) : `${pn}@s.whatsapp.net`;
+            lidToPhoneJid.set(cleanNumber, resolvedPhone);
           }
         }
       } catch (resolveErr) {
@@ -913,10 +933,10 @@ app.post('/api/messages/clear', async (req, res) => {
  
     if (to.includes('@')) {
       targetJid = to.replace('@c.us', '@s.whatsapp.net');
-    } else if (resolvedPhoneJid) {
-      targetJid = resolvedPhoneJid.includes('@') ? resolvedPhoneJid : `${resolvedPhoneJid}@s.whatsapp.net`;
     } else if (knownLidNumbers.has(cleanNumber)) {
       targetJid = `${cleanNumber}@lid`;
+    } else if (resolvedPhoneJid) {
+      targetJid = resolvedPhoneJid.includes('@') ? resolvedPhoneJid : `${resolvedPhoneJid}@s.whatsapp.net`;
     } else {
       targetJid = `${cleanNumber}@s.whatsapp.net`;
     }
