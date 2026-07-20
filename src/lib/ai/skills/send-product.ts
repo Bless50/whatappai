@@ -11,8 +11,8 @@ export const sendProductSkill: SkillDefinition = {
     function: {
       name: 'send_product',
       description:
-        'Search for a product (like a dress, shoes, accessories) in the database and send its photo and pricing to the customer via WhatsApp. ' +
-        'Use this when the customer asks to see pictures, photos, or get info of an item in stock.',
+        'Search for a specific product (like a dress, shoes, accessories) in the database and immediately send its photo and pricing to the customer via WhatsApp. ' +
+        'CRITICAL: If the customer asks "what do you have" or "show me your dresses", DO NOT use this tool first. Use search_products first to get a list of available items, tell the customer what you have, and THEN use this tool when they pick one.',
       parameters: {
         type: 'object',
         properties: {

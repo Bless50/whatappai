@@ -22,6 +22,7 @@ import { escalateSkill } from './escalate'
 import { notifyOwnerSkill } from './notify-owner'
 import { scheduleFollowupSkill } from './schedule-followup'
 import { sendProductSkill } from './send-product'
+import { searchProductsSkill } from './search-products'
 
 // ============================================================
 // Skill Registry
@@ -37,6 +38,7 @@ const SKILL_REGISTRY: Map<AISkillType, SkillDefinition> = new Map([
   ['notify_owner', notifyOwnerSkill],
   ['schedule_followup', scheduleFollowupSkill],
   ['send_product', sendProductSkill],
+  ['search_products', searchProductsSkill],
 ])
 
 /**

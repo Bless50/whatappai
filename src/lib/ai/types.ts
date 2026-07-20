@@ -59,7 +59,8 @@ export type AISkillType =
   | 'update_contact'
   | 'notify_owner'
   | 'schedule_followup'
-  | 'send_product';
+  | 'send_product'
+  | 'search_products';
 
 export interface AIAgentSkill {
   id: string;
