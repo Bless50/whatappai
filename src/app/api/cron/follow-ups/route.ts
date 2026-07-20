@@ -61,23 +61,15 @@ export async function GET(request: Request) {
         continue
       }
 
-      // 3. Mark as in_progress (using a dummy 'in_progress' status, or we can just leave it pending)
-      // We will leave it pending, but if the LLM crashes we could get stuck in a loop.
-      // Let's mark it 'completed' early, and if it fails, we set to 'failed'.
-      await supabase
-        .from('follow_ups')
-        .update({ status: 'completed', completed_at: new Date().toISOString() })
-        .eq('id', followup.id)
-
-      // 4. Fetch the owner user_id to send the message
+      // 3. Fetch the owner user_id to send the message
       const { data: config } = await supabase
         .from('whatsapp_config')
         .select('user_id')
         .eq('account_id', followup.account_id)
         .maybeSingle()
 
-      // 5. Wake up the LLM
-      await executeAgent(agentData as AIAgent, {
+      // 4. Wake up the LLM and send the follow-up
+      const reply = await executeAgent(agentData as AIAgent, {
         accountId: followup.account_id,
         conversationId: followup.conversation_id,
         contactId: followup.contact_id,
@@ -88,7 +80,23 @@ export async function GET(request: Request) {
         proactiveInstruction: followup.task_description,
       })
 
-      processedCount++
+      if (reply) {
+        // 5. Only mark as completed if the message was successfully dispatched
+        await supabase
+          .from('follow_ups')
+          .update({ status: 'completed', completed_at: new Date().toISOString() })
+          .eq('id', followup.id)
+        processedCount++
+      } else {
+        // Mark as failed if the agent engine returned null (e.g. gateway fetch failed or env var missing)
+        await supabase
+          .from('follow_ups')
+          .update({ 
+            status: 'failed', 
+            error_message: 'Agent returned null (dispatch failed, gateway offline, or WHATSAPP_GATEWAY_URL not configured on Vercel)' 
+          })
+          .eq('id', followup.id)
+      }
     } catch (err) {
       console.error(`[cron/follow-ups] Failed to process follow_up ${followup.id}:`, err)
       await supabase
