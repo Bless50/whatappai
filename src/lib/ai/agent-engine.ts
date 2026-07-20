@@ -212,6 +212,24 @@ export async function executeAgent(
               console.log('[ai/engine] Vision analysis description:', imageDescription)
               const originalText = input.messageText || ''
               input.messageText = `${originalText}\n\n[Attached Image Description: ${imageDescription}]`.trim()
+
+              // Update the messages table in DB with the vision description for Inbox view
+              const { data: lastMsg } = await db
+                .from('messages')
+                .select('id')
+                .eq('conversation_id', input.conversationId)
+                .eq('sender_type', 'customer')
+                .eq('content_type', 'image')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+
+              if (lastMsg?.id) {
+                await db
+                  .from('messages')
+                  .update({ content_text: `📷 Vision Analysis: ${imageDescription}` })
+                  .eq('id', lastMsg.id)
+              }
               
               // Clear these so we don't pass base64 payload to text-only DeepSeek
               inboundImageBase64 = null
