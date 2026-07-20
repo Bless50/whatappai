@@ -76,7 +76,7 @@ export const scheduleFollowupSkill: SkillDefinition = {
         .from('profiles')
         .select('user_id')
         .eq('account_id', context.accountId)
-        .in('role', ['owner', 'admin'])
+        .in('account_role', ['owner', 'admin'])
 
       if (members && members.length > 0) {
         const notifications = members.map((m) => ({
